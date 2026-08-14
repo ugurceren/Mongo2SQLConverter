@@ -47,7 +47,8 @@ class MongoClientWrapper:
             self._client = None
 
     def list_collections(self) -> list[str]:
-        return sorted(self.db.list_collection_names())
+        names = self.db.list_collection_names()
+        return sorted(n for n in names if not n.startswith("system."))
 
     def collection(self, name: str) -> Collection:
         return self.db[name]
