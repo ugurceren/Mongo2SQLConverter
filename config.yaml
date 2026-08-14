@@ -1,0 +1,18 @@
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "mydb"
+
+mssql:
+  server: "localhost"
+  database: "master"
+  schema: "dbo"
+  trusted_connection: true
+  driver: "ODBC Driver 17 for SQL Server"
+
+profiler:
+  headroom: 1.5
+  map_min_keys: 30
+  map_max_fill: 0.2
+
+ui:
+  port: 8502

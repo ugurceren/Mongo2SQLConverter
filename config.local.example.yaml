@@ -1,0 +1,12 @@
+mongodb:
+  uri: "mongodb://host:27017/?authSource=admin"
+  database: "mydb"
+  username: "user"
+  password: "secret"
+
+mssql:
+  server: "srv\\INSTANCE"
+  database: "MyWarehouse"
+  schema: "dbo"
+  trusted_connection: true
+  driver: "ODBC Driver 17 for SQL Server"
