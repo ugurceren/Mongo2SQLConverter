@@ -65,34 +65,40 @@ def page_connections() -> None:
     connections.render(SETTINGS)
 
 
-with st.sidebar:
-    theme.brand()
+page_schema = st.Page(
+    page_discovery,
+    title="Sema kesfi",
+    icon=":material/schema:",
+    url_path="discovery",
+    default=True,
+)
+page_sql = st.Page(
+    page_transfer,
+    title="SQL aktarimi",
+    icon=":material/moving:",
+    url_path="transfer",
+)
+page_links = st.Page(
+    page_connections,
+    title="Baglantilar",
+    icon=":material/settings_ethernet:",
+    url_path="connections",
+)
 
 navigation = st.navigation(
-    [
-        st.Page(
-            page_discovery,
-            title="Sema kesfi",
-            icon=":material/schema:",
-            url_path="discovery",
-            default=True,
-        ),
-        st.Page(
-            page_transfer,
-            title="SQL aktarimi",
-            icon=":material/moving:",
-            url_path="transfer",
-        ),
-        st.Page(
-            page_connections,
-            title="Baglantilar",
-            icon=":material/settings_ethernet:",
-            url_path="connections",
-        ),
-    ]
+    [page_schema, page_sql, page_links],
+    position="hidden",
 )
 
 with st.sidebar:
+    theme.brand()
+    theme.nav_menu(
+        [
+            ("nav_schema", page_schema, ":material/schema:", "Sema kesfi"),
+            ("nav_sql", page_sql, ":material/moving:", "SQL aktarimi"),
+            ("nav_conn", page_links, ":material/settings_ethernet:", "Baglantilar"),
+        ]
+    )
     _sidebar_status(SETTINGS)
 
 navigation.run()

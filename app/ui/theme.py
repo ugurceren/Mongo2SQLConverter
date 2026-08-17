@@ -82,20 +82,99 @@ CSS = """
 }
 
 /* ---------- sidebar ---------- */
-[data-testid="stSidebar"] { border-right: 1px solid var(--m2s-border); }
-[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
-.m2s-brand { display: flex; align-items: center; gap: 0.7rem; margin: 0 0 1.2rem 0; }
-.m2s-logo {
-    width: 38px; height: 38px; border-radius: 10px;
-    background: linear-gradient(140deg, var(--m2s-accent), #7b5cff);
-    color: #fff; font-weight: 700; font-size: 0.82rem;
-    display: flex; align-items: center; justify-content: center;
-    flex: 0 0 38px;
+section[data-testid="stSidebar"] {
+    border-right: 1px solid var(--m2s-border);
+    min-width: 272px !important;
 }
-.m2s-brand-name { font-weight: 650; font-size: 0.98rem; line-height: 1.15; }
-.m2s-brand-sub { color: var(--m2s-muted); font-size: 0.76rem; }
+[data-testid="stSidebar"] .block-container { padding-top: 0.85rem; }
+[data-testid="stSidebarNav"] { display: none !important; }
 
-.m2s-side-block { margin-top: 1.3rem; }
+.m2s-brand {
+    display: flex; align-items: center; gap: 0.75rem;
+    margin: 0 0 1rem 0; padding: 0.1rem 0.05rem 1rem 0.05rem;
+    border-bottom: 1px solid var(--m2s-border);
+}
+.m2s-logo {
+    width: 46px; height: 46px; border-radius: 13px;
+    background: linear-gradient(145deg, #4c8dff 0%, #7b5cff 52%, #22d3ee 100%);
+    color: #fff; font-weight: 800; font-size: 0.78rem; letter-spacing: 0.04em;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 46px;
+    box-shadow: 0 0 0 1px rgba(123, 92, 255, 0.35), 0 8px 22px rgba(76, 141, 255, 0.38);
+}
+.m2s-brand-name {
+    font-weight: 750; font-size: 1.14rem; line-height: 1.1;
+    letter-spacing: -0.03em;
+}
+.m2s-brand-sub { color: var(--m2s-muted); font-size: 0.75rem; margin-top: 0.12rem; }
+
+.st-key-nav_schema, .st-key-nav_sql, .st-key-nav_conn { margin: 0 0 0.48rem 0; }
+[data-testid="stSidebar"] [data-testid="stPageLink"] a,
+[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {
+    display: flex !important; align-items: center; gap: 0.7rem;
+    border-radius: 12px !important;
+    padding: 0.78rem 0.9rem !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    letter-spacing: -0.01em;
+    text-decoration: none !important;
+    transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease !important;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover,
+[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
+    transform: translateX(3px);
+    filter: brightness(1.12);
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] [data-testid="stIconMaterial"] {
+    font-size: 1.35rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] p {
+    margin: 0 !important;
+}
+
+.st-key-nav_schema [data-testid="stPageLink"] a {
+    color: #b8f7ff !important;
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.40), rgba(76, 141, 255, 0.16)) !important;
+    border: 1px solid #22d3ee !important;
+    box-shadow: inset 3px 0 0 #22d3ee, 0 8px 20px rgba(34, 211, 238, 0.18);
+}
+.st-key-nav_schema [data-testid="stPageLink"] a:hover,
+.st-key-nav_schema [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.58), rgba(76, 141, 255, 0.26)) !important;
+    box-shadow: inset 3px 0 0 #67e8f9, 0 0 24px rgba(34, 211, 238, 0.42);
+}
+.st-key-nav_schema [data-testid="stIconMaterial"],
+.st-key-nav_schema [data-testid="stPageLink"] p { color: #7af0ff !important; }
+
+.st-key-nav_sql [data-testid="stPageLink"] a {
+    color: #ffe0b0 !important;
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.42), rgba(245, 158, 11, 0.16)) !important;
+    border: 1px solid #fb923c !important;
+    box-shadow: inset 3px 0 0 #fb923c, 0 8px 20px rgba(251, 146, 60, 0.18);
+}
+.st-key-nav_sql [data-testid="stPageLink"] a:hover,
+.st-key-nav_sql [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.60), rgba(245, 158, 11, 0.26)) !important;
+    box-shadow: inset 3px 0 0 #fdba74, 0 0 24px rgba(251, 146, 60, 0.42);
+}
+.st-key-nav_sql [data-testid="stIconMaterial"],
+.st-key-nav_sql [data-testid="stPageLink"] p { color: #ffd08a !important; }
+
+.st-key-nav_conn [data-testid="stPageLink"] a {
+    color: #f0d4ff !important;
+    background: linear-gradient(135deg, rgba(167, 139, 250, 0.44), rgba(232, 121, 249, 0.16)) !important;
+    border: 1px solid #c084fc !important;
+    box-shadow: inset 3px 0 0 #c084fc, 0 8px 20px rgba(167, 139, 250, 0.18);
+}
+.st-key-nav_conn [data-testid="stPageLink"] a:hover,
+.st-key-nav_conn [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, rgba(167, 139, 250, 0.62), rgba(232, 121, 249, 0.26)) !important;
+    box-shadow: inset 3px 0 0 #e9d5ff, 0 0 24px rgba(167, 139, 250, 0.44);
+}
+.st-key-nav_conn [data-testid="stIconMaterial"],
+.st-key-nav_conn [data-testid="stPageLink"] p { color: #e9b8ff !important; }
+
+.m2s-side-block { margin-top: 1.15rem; }
 .m2s-side-label {
     font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--m2s-muted); font-weight: 600; margin-bottom: 0.5rem;
@@ -111,11 +190,6 @@ CSS = """
     border-top: 1px solid var(--m2s-border);
     color: var(--m2s-muted); font-size: 0.76rem;
 }
-
-[data-testid="stSidebarNav"] { padding-top: 0.2rem; }
-[data-testid="stSidebarNavLink"] { border-radius: 9px; margin: 2px 0; }
-[data-testid="stSidebarNavLink"]:hover { background: rgba(240, 246, 252, 0.05); }
-[data-testid="stSidebarNavLink"][aria-current="page"] { background: var(--m2s-accent-soft); }
 
 /* ---------- collapsed sidebar keeps a narrow icon rail ---------- */
 [data-testid="stSidebar"][aria-expanded="false"] {
@@ -139,17 +213,21 @@ CSS = """
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-status-text,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-foot,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-rail-hide { display: none !important; }
+[data-testid="stSidebar"][aria-expanded="false"] .m2s-logo {
+    width: 36px; height: 36px; flex-basis: 36px; font-size: 0.62rem;
+}
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-block {
     margin-top: 0.7rem; padding-top: 0.7rem;
     border-top: 1px solid var(--m2s-border);
 }
-/* zero font-size hides the link label; the icon carries its own size */
-[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] {
-    justify-content: center;
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a {
+    justify-content: center !important;
     font-size: 0 !important;
-    padding-left: 0.3rem; padding-right: 0.3rem;
+    padding: 0.55rem 0.3rem !important;
 }
-[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] > span { margin: 0 !important; }
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a span {
+    display: none !important;
+}
 
 /* ---------- controls ---------- */
 .stButton button, .stDownloadButton button, [data-testid="stFormSubmitButton"] button {
@@ -201,6 +279,13 @@ def brand() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def nav_menu(items: Sequence[tuple[str, object, str, str]]) -> None:
+    """Colored page links that sit directly under the brand block."""
+    for key, page, icon, label in items:
+        with st.container(key=key):
+            st.page_link(page, label=label, icon=icon, width="stretch")
 
 
 def status_row(label: str, value: str, state: State = "off") -> str:
