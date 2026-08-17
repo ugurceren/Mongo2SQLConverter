@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Iterable, Sequence
+
 import pyodbc
 
 
@@ -70,6 +72,92 @@ class MssqlConnection:
         cur.execute("SELECT SUSER_SNAME(), DB_NAME()")
         row = cur.fetchone()
         return str(row[0]), str(row[1])
+
+    # ----------------------------------------------------------------------
+    # schema / table management
+    # ----------------------------------------------------------------------
+
+    def ensure_schema(self, schema: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = ?) "
+            "EXEC(N'CREATE SCHEMA [' + ? + N']')",
+            schema,
+            schema,
+        )
+        self.conn.commit()
+
+    def table_exists(self, schema: str, table: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id "
+            "WHERE s.name = ? AND t.name = ?",
+            schema,
+            table,
+        )
+        return cur.fetchone() is not None
+
+    def drop_table(self, schema: str, table: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(f"IF OBJECT_ID(N'[{schema}].[{table}]', N'U') IS NOT NULL DROP TABLE [{schema}].[{table}]")
+        self.conn.commit()
+
+    def execute(self, sql: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(sql)
+        self.conn.commit()
+
+    # ----------------------------------------------------------------------
+    # data movement
+    # ----------------------------------------------------------------------
+
+    def clear_table(self, schema: str, table: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(f"DELETE FROM [{schema}].[{table}]")
+        self.conn.commit()
+
+    def delete_keys(
+        self, schema: str, table: str, key_column: str, keys: Sequence[Any], chunk: int = 500
+    ) -> None:
+        """Remove rows by key so a re-run replaces them (child rows cascade)."""
+        if not keys:
+            return
+        cur = self.conn.cursor()
+        for start in range(0, len(keys), chunk):
+            part = keys[start : start + chunk]
+            marks = ", ".join("?" for _ in part)
+            cur.execute(
+                f"DELETE FROM [{schema}].[{table}] WHERE [{key_column}] IN ({marks})",
+                *part,
+            )
+
+    def insert_rows(
+        self, schema: str, table: str, columns: Sequence[str], rows: Iterable[Sequence[Any]]
+    ) -> int:
+        batch = list(rows)
+        if not batch:
+            return 0
+        cols = ", ".join(f"[{name}]" for name in columns)
+        marks = ", ".join("?" for _ in columns)
+        sql = f"INSERT INTO [{schema}].[{table}] ({cols}) VALUES ({marks})"
+
+        cur = self.conn.cursor()
+        try:
+            cur.fast_executemany = True
+            cur.executemany(sql, batch)
+        except Exception:
+            # fast_executemany rejects some MAX / mixed-width parameter sets;
+            # a plain executemany still gets the batch in.
+            cur = self.conn.cursor()
+            cur.executemany(sql, batch)
+        return len(batch)
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def rollback(self) -> None:
+        if self._conn is not None:
+            self._conn.rollback()
 
 
 def available_drivers() -> list[str]:

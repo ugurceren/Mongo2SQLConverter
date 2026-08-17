@@ -50,6 +50,24 @@ class MongoClientWrapper:
         names = self.db.list_collection_names()
         return sorted(n for n in names if not n.startswith("system."))
 
+    def list_databases(self) -> list[str]:
+        names = self.db.client.list_database_names()
+        skip = {"admin", "local", "config"}
+        return sorted(n for n in names if n not in skip)
+
+    def test(self) -> dict[str, Any]:
+        self.connect()
+        collections = self.list_collections()
+        try:
+            databases = self.list_databases()
+        except Exception:
+            databases = []
+        return {
+            "database": self.database_name,
+            "collections": collections,
+            "databases": databases,
+        }
+
     def collection(self, name: str) -> Collection:
         return self.db[name]
 

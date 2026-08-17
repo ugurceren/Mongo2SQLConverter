@@ -670,33 +670,37 @@ def print_report(plan: dict[str, Any], profile: Profile, sampled: int | None) ->
 # --------------------------------------------------------------------------
 
 
-def render_ddl(plan: dict[str, Any]) -> str:
-    schema = plan["schema"]
+def key_column_type(plan: dict[str, Any]) -> str:
+    """Type used for the root primary key and every child foreign key."""
     root = plan["root"]
-    lines = [
-        f"-- {plan['collection']} icin taslak sema ({plan['documents']} dokuman profillendi)",
-        "-- Uretilmis oneri; uygulamadan once gozden gecirin.",
-        "",
-    ]
-
     key_column = next((c for c in root["columns"] if c["name"] == "mongo_id"), None)
     key_type = key_column["sql_type"] if key_column else "NVARCHAR(450)"
     if key_type == "NVARCHAR(MAX)":
         key_type = f"NVARCHAR({INDEX_KEY_LIMIT})"
+    return key_type
 
-    lines.append(f"CREATE TABLE [{schema}].[{root['table']}] (")
+
+def ddl_statements(plan: dict[str, Any]) -> list[tuple[str, str]]:
+    """(table, CREATE TABLE ...) per table, without the trailing semicolon."""
+    schema = plan["schema"]
+    root = plan["root"]
+    key_type = key_column_type(plan)
+    out: list[tuple[str, str]] = []
+
     body = []
     for column in root["columns"]:
         sql = key_type if column["name"] == "mongo_id" else column["sql_type"]
         null = "NULL" if column["nullable"] and column["name"] != "mongo_id" else "NOT NULL"
         body.append(f"    [{column['name']}] {sql} {null}")
     body.append(f"    CONSTRAINT [PK_{root['table']}] PRIMARY KEY ([mongo_id])")
-    lines.append(",\n".join(body))
-    lines.append(");")
-    lines.append("")
+    out.append(
+        (
+            root["table"],
+            f"CREATE TABLE [{schema}].[{root['table']}] (\n" + ",\n".join(body) + "\n)",
+        )
+    )
 
     for child in plan["children"]:
-        lines.append(f"CREATE TABLE [{schema}].[{child['table']}] (")
         body = [f"    [{child['parent_key']}] {key_type} NOT NULL"]
         if child["kind"] == "map":
             body.append(f"    [{child['key_column']['name']}] {child['key_column']['sql_type']} NOT NULL")
@@ -715,27 +719,31 @@ def render_ddl(plan: dict[str, Any]) -> str:
             f"    CONSTRAINT [FK_{child['table']}] FOREIGN KEY ([{child['parent_key']}]) "
             f"REFERENCES [{schema}].[{root['table']}] ([mongo_id]) ON DELETE CASCADE"
         )
-        lines.append(",\n".join(body))
-        lines.append(");")
-        lines.append("")
+        out.append(
+            (
+                child["table"],
+                f"CREATE TABLE [{schema}].[{child['table']}] (\n" + ",\n".join(body) + "\n)",
+            )
+        )
 
+    return out
+
+
+def render_ddl(plan: dict[str, Any]) -> str:
+    lines = [
+        f"-- {plan['collection']} icin taslak sema ({plan['documents']} dokuman profillendi)",
+        "-- Uretilmis oneri; uygulamadan once gozden gecirin.",
+        "",
+    ]
+    for _, statement in ddl_statements(plan):
+        lines.append(statement + ";")
+        lines.append("")
     return "\n".join(lines)
 
 
-def render_drdl(plan: dict[str, Any], database: str) -> str:
-    """
-    DRDL-shaped YAML, for familiarity and for feeding BI tooling.
-
-    Emitted by hand rather than via a yaml dependency for the pipeline blocks,
-    which need MongoDB's `$unwind` spelling preserved exactly.
-    """
+def _drdl_tables(plan: dict[str, Any]) -> list[str]:
     collection = plan["collection"]
-    lines = [
-        "# mongodrdl uyumlu sekilde uretildi; BI Connector 2026-09 sonrasi EOL.",
-        "schema:",
-        f"- db: {database}",
-        "  tables:",
-    ]
+    lines: list[str] = []
 
     def emit_columns(columns: list[dict[str, Any]], indent: str) -> None:
         lines.append(f"{indent}columns:")
@@ -782,7 +790,34 @@ def render_drdl(plan: dict[str, Any], database: str) -> str:
         ]
         emit_columns(columns, "    ")
 
+    return lines
+
+
+def render_database_drdl(plans: list[dict[str, Any]], database: str) -> str:
+    """One DRDL schema with tables from every collection plan."""
+    lines = [
+        "# mongodrdl uyumlu sekilde uretildi; BI Connector 2026-09 sonrasi EOL.",
+        "schema:",
+        f"- db: {database}",
+        "  tables:",
+    ]
+    for plan in plans:
+        lines.extend(_drdl_tables(plan))
     return "\n".join(lines) + "\n"
+
+
+def render_drdl(plan: dict[str, Any], database: str) -> str:
+    """
+    DRDL-shaped YAML, for familiarity and for feeding BI tooling.
+
+    Emitted by hand rather than via a yaml dependency for the pipeline blocks,
+    which need MongoDB's `$unwind` spelling preserved exactly.
+    """
+    return render_database_drdl([plan], database)
+
+
+def render_database_ddl(plans: list[dict[str, Any]]) -> str:
+    return "\n".join(render_ddl(plan) for plan in plans)
 
 
 # --------------------------------------------------------------------------
@@ -808,6 +843,22 @@ def iter_from_mongo(
     source: MongoClientWrapper, collection: str, sample: int
 ) -> Iterator[dict[str, Any]]:
     yield from source.iter_documents(collection, sample=sample)
+
+
+def profile_collection(
+    source: MongoClientWrapper,
+    collection: str,
+    sample: int,
+    schema: str,
+    map_min_keys: int,
+    map_max_fill: float,
+    headroom: float,
+) -> tuple[Profile, dict[str, Any]]:
+    profile = Profile()
+    for doc in iter_from_mongo(source, collection, sample):
+        profile.add_document(doc)
+    maps = detect_map_prefixes(profile, map_min_keys, map_max_fill)
+    return profile, build_plan(profile, collection, schema, maps, headroom)
 
 
 # --------------------------------------------------------------------------

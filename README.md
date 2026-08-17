@@ -39,10 +39,16 @@ python tools/infer_schema.py --from-file export.json --collection mycol --out-dr
 ## Yapi
 
 - `core/inspect.py` — sema profilleme, DRDL/DDL
+- `core/transfer.py` — plana gore flatten + MSSQL'e yazma
 - `core/mongo.py` — Mongo baglantisi
 - `core/mssql.py` — MSSQL baglantisi
 - `core/settings.py` — config.yaml + config.local.yaml
-- `app/main.py` — Streamlit arayuz
+- `app/main.py` — Streamlit kabugu (gezinme, durum)
+- `app/ui/theme.py` — stil ve ortak arayuz parcalari
+- `app/ui/services.py` — arayuzun kullandigi baglanti/profil yardimcilari
+- `app/ui/discovery.py` — Sema kesfi sayfasi (SQL gerekmez)
+- `app/ui/transfer.py` — SQL aktarimi sayfasi
+- `app/ui/connections.py` — Baglantilar sayfasi
 - `tools/infer_schema.py` — CLI
 
 ## Ayirma
