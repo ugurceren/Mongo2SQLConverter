@@ -9,6 +9,7 @@ from app.ui.services import (
     Settings,
     collection_list,
     invalidate_collections,
+    nesting_choice,
     profile_many,
 )
 from core.inspect import render_database_ddl, render_database_drdl
@@ -59,15 +60,16 @@ def render(settings: Settings) -> None:
 
     st.write("")
     with st.container(border=True):
-        theme.card_title("Cikti uret", "Tek collection tam sema verir; database geneli yalnizca DRDL.")
-        row = st.columns([2.6, 1.1, 1.3, 1.3], vertical_alignment="bottom")
+        theme.card_title(
+            "Cikti uret",
+            "Once collection secilir; kirilim secenekleri o collection'un nested yapisina gore gelir.",
+        )
+        row = st.columns([2.6, 1.1, 1.5], vertical_alignment="bottom")
         with row[0]:
             if collections:
-                default = "conversations" if "conversations" in collections else collections[0]
                 collection = st.selectbox(
                     "Collection",
                     options=collections,
-                    index=collections.index(default),
                     key="disc_collection",
                 )
             else:
@@ -84,19 +86,25 @@ def render(settings: Settings) -> None:
             )
         with row[2]:
             run_collection = st.button(
-                "Semayi cikar", type="primary", disabled=not collection, width="stretch"
+                "Semayi cikar", disabled=not collection, width="stretch"
             )
-        with row[3]:
-            run_database = st.button(
-                "Database DRDL", disabled=not collections, width="stretch"
-            )
+        nesting = nesting_choice(settings, collection)
+        run_database = st.button(
+            "Database DRDL",
+            type="primary",
+            icon=":material/database:",
+            disabled=not collections,
+            width="stretch",
+            key="disc_database_drdl",
+            help="Secilen ornek boyutuyla tum collection'lari tarar ve tek bir DRDL uretir.",
+        )
 
     if run_collection or run_database:
         whole_db = bool(run_database)
         targets = collections if whole_db else [collection]
         st.write("")
         plans, skipped, errors, total_docs = profile_many(
-            settings, targets, int(sample), settings.schema
+            settings, targets, int(sample), settings.schema, nesting=nesting
         )
         if plans:
             database = settings.mongo.get("database") or "database"

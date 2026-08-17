@@ -87,6 +87,29 @@ class MssqlConnection:
         )
         self.conn.commit()
 
+    def column_char_widths(self, schema: str, table: str) -> dict[str, int | None]:
+        """NVARCHAR/CHAR declared length. None means MAX (no clip). Missing tables: {}."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT c.name, t.name, c.max_length "
+            "FROM sys.columns c "
+            "JOIN sys.tables tb ON tb.object_id = c.object_id "
+            "JOIN sys.schemas s ON s.schema_id = tb.schema_id "
+            "JOIN sys.types t ON t.user_type_id = c.user_type_id "
+            "WHERE s.name = ? AND tb.name = ?",
+            schema,
+            table,
+        )
+        out: dict[str, int | None] = {}
+        for name, type_name, max_length in cur.fetchall():
+            kind = str(type_name).lower()
+            length = int(max_length)
+            if kind in {"nvarchar", "nchar"}:
+                out[str(name)] = None if length < 0 else length // 2
+            elif kind in {"varchar", "char"}:
+                out[str(name)] = None if length < 0 else length
+        return out
+
     def table_exists(self, schema: str, table: str) -> bool:
         cur = self.conn.cursor()
         cur.execute(

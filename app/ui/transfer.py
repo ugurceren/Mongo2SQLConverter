@@ -1,4 +1,4 @@
-"""Transfer page: load a selected collection into SQL Server tables."""
+"""Transfer page: full or incremental load of a collection into SQL Server."""
 
 from __future__ import annotations
 
@@ -9,10 +9,13 @@ from app.ui.services import (
     Settings,
     collection_list,
     mongo_client,
+    nesting_choice,
     profile_one,
     sql_target,
 )
-from core.inspect import render_database_ddl, sql_ident
+from core.inspect import nesting_labels, render_database_ddl, sql_ident
+from core.mongo import decode_mongo_id, id_after_filter
+from core.settings import load_sync_watermark, save_sync_watermark
 from core.transfer import (
     ensure_tables,
     plan_tables,
@@ -28,7 +31,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
     with st.container(border=True):
         theme.card_title(
             "Hedef",
-            "Tablolar secilen collection'in profilinden uretilir; sabit sema yoktur.",
+            "Kirilim secenekleri secilen collection'un nested yapisina gore sunulur.",
         )
         row = st.columns([2.2, 1.6, 1.6], vertical_alignment="bottom")
         with row[0]:
@@ -49,17 +52,59 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 help="Child tablolar bu addan turer: <ad>_<alan>.",
             )
 
+        nesting = nesting_choice(settings, collection)
+
+        mode = st.radio(
+            "Senkron",
+            ("Full sync", "Incremental"),
+            horizontal=True,
+            key="tr_mode",
+            help="Full: tum dokumanlar. Incremental: son kaydedilen `_id` sonrasi yeni kayitlar.",
+        )
+        incremental = mode == "Incremental"
+        watermark = load_sync_watermark(collection) if collection else None
+
+        if incremental:
+            if watermark:
+                st.caption(
+                    f"Son watermark · `_id` > `{watermark['last_id']}`"
+                    + (f" · {watermark['updated']}" if watermark.get("updated") else "")
+                )
+            else:
+                st.warning(
+                    "Bu collection icin watermark yok. Once **Full sync** calistirin, "
+                    "ya da incremental ilk seferde tum dokumanlari okur."
+                )
+        else:
+            st.caption(
+                "Full sync tum dokumanlari yazar. Silinen Mongo kayitlari SQL'den de dussun "
+                "istiyorsaniz tablolari bosaltin veya yeniden olusturun."
+            )
+
         row2 = st.columns([1.2, 1.2, 2.6], vertical_alignment="bottom")
         with row2[0]:
             sample = st.number_input(
-                "Ornek", min_value=0, value=0, step=500, key="tr_sample",
-                help="Profilleme icin. 0 = tam tarama; yazma her zaman tum dokumanlari kapsar.",
+                "Profil ornegi",
+                min_value=0,
+                value=0,
+                step=500,
+                key="tr_sample",
+                help="Yalnizca sema profili. 0 = tam tarama. Yazma bu degeri kullanmaz.",
             )
         with row2[1]:
             batch = st.number_input("Batch", min_value=50, value=500, step=50, key="tr_batch")
         with row2[2]:
-            recreate = st.checkbox("Tablolari yeniden olustur (DROP + CREATE)", key="tr_recreate")
-            clear_first = st.checkbox("Yazmadan once tablolari bosalt", key="tr_clear")
+            recreate = st.checkbox(
+                "Tablolari yeniden olustur (DROP + CREATE)",
+                key="tr_recreate",
+                disabled=incremental,
+                help="Incremental modda sema durur; yalnizca yeni satirlar yazilir.",
+            )
+            clear_first = st.checkbox(
+                "Yazmadan once tablolari bosalt",
+                key="tr_clear",
+                disabled=incremental,
+            )
             allow_null = st.checkbox(
                 "Anahtar disindaki kolonlar NULL kabul etsin",
                 value=True,
@@ -73,28 +118,52 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         "table": table.strip(),
         "sample": int(sample),
         "batch": int(batch),
-        "recreate": recreate,
-        "clear_first": clear_first,
+        "recreate": False if incremental else recreate,
+        "clear_first": False if incremental else clear_first,
         "allow_null": allow_null,
+        "mode": "incremental" if incremental else "full",
+        "watermark": watermark,
+        "nesting": nesting,
     }
 
 
 def _build_plan(settings: Settings, options: dict) -> dict:
-    plan = profile_one(settings, options["collection"], options["sample"], options["schema"])
+    plan = profile_one(
+        settings,
+        options["collection"],
+        options["sample"],
+        options["schema"],
+        nesting=options["nesting"],
+    )
     plan = retarget_plan(plan, schema=options["schema"], root_table=options["table"])
     return relax_nullability(plan) if options["allow_null"] else plan
+
+
+def _write_query(options: dict) -> dict | None:
+    if options["mode"] != "incremental":
+        return None
+    mark = options.get("watermark")
+    if not mark:
+        return None
+    try:
+        last_id = decode_mongo_id(mark["last_id"], mark["last_id_type"])
+    except Exception:
+        return None
+    return id_after_filter(last_id)
 
 
 def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
     plan = _build_plan(settings, options)
     st.session_state[PLAN_KEY] = plan
     tables = plan_tables(plan)
+    mode_label = "Incremental" if options["mode"] == "incremental" else "Full sync"
 
+    nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
     with st.container(border=True):
         theme.card_title(
             "Plan",
             f"<code>{settings.mssql.get('database')}</code> · "
-            f"<code>{options['schema']}</code> — {len(tables)} tablo",
+            f"<code>{options['schema']}</code> — {len(tables)} tablo · {mode_label} · {nesting_title}",
         )
         st.code("\n".join(tables), language="text")
 
@@ -112,51 +181,62 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
         if not write:
             return
 
+        query = _write_query(options)
         status = st.empty()
         bar = st.progress(0)
-        expected = options["sample"]
 
         def on_progress(done: int, total: int) -> None:
             status.caption(f"{done} dokuman islendi")
-            if expected:
-                bar.progress(min(done / expected, 1.0))
+            if total:
+                bar.progress(min(done / total, 1.0))
 
         source = mongo_client(settings.mongo)
         try:
             source.connect()
+            expected = source.estimated_count(options["collection"], query)
             stats = transfer_collection(
                 source,
                 target,
                 plan,
                 options["collection"],
-                sample=expected,
+                sample=0,
                 batch_size=options["batch"],
                 clear_first=options["clear_first"],
-                progress=on_progress,
+                query=query,
+                mode=options["mode"],
+                progress=lambda done, _: on_progress(done, expected),
             )
         finally:
             source.close()
         status.empty()
         bar.empty()
 
+        if stats.last_id and stats.last_id_type:
+            save_sync_watermark(options["collection"], stats.last_id, stats.last_id_type)
+
         with st.container(border=True):
             theme.card_title("Sonuc", f"{options['collection']} → {options['schema']}")
-            cols = st.columns(4)
-            cols[0].metric("Dokuman", stats.documents)
-            cols[1].metric("Satir", stats.total_rows)
-            cols[2].metric("Atlanan", stats.skipped_no_id)
-            cols[3].metric("Kirpilan", stats.truncated)
+            cols = st.columns(5)
+            cols[0].metric("Mod", mode_label)
+            cols[1].metric("Dokuman", stats.documents)
+            cols[2].metric("Satir", stats.total_rows)
+            cols[3].metric("Atlanan", stats.skipped_no_id)
+            cols[4].metric("Kirpilan", stats.truncated)
+            if stats.last_id:
+                st.caption(f"Watermark `_id` = `{stats.last_id}`")
             st.dataframe(
                 [{"tablo": table, "satir": count} for table, count in stats.rows.items()],
                 hide_index=True,
                 width="stretch",
             )
+        if stats.documents == 0 and options["mode"] == "incremental":
+            st.info("Yeni dokuman yok; watermark zaten guncel.")
         if stats.skipped_no_id:
             st.caption(f"{stats.skipped_no_id} dokumanda `_id` yok, birincil anahtar uretilemedi.")
         if stats.truncated:
             st.warning(
-                f"{stats.truncated} deger kolon genisligine kirpildi. Tam tarama ile "
-                "profilleyip tablolari yeniden olusturmak bunu giderir."
+                f"{stats.truncated} deger kolon genisligine kirpildi. Full sync ile "
+                "tam tarama yapip tablolari yeniden olusturmak bunu giderir."
             )
     finally:
         target.close()
@@ -166,8 +246,8 @@ def render(settings: Settings) -> None:
     theme.page_header(
         "Adim 2",
         "SQL aktarimi",
-        "Secilen collection profillenir, tablolar plandan uretilir ve dokumanlar "
-        "batch batch yazilir. Ayni collection tekrar yazildiginda satirlar cogalmaz.",
+        "Full sync tum collection'i yazar. Incremental, son `_id` watermark'indan "
+        "sonraki yeni dokumanlari ekler; eski kayitlardaki guncelleme icin full gerekir.",
     )
 
     collections, error, warning = collection_list(settings)
@@ -190,6 +270,7 @@ def render(settings: Settings) -> None:
     ready = bool(
         settings.mongo_ready and settings.sql_ready and options["collection"] and options["table"]
     )
+    write_label = "Artimli senkron" if options["mode"] == "incremental" else "Tam senkron"
 
     st.write("")
     actions = st.columns([1.3, 1.3, 1.3, 2.1])
@@ -198,10 +279,14 @@ def render(settings: Settings) -> None:
             "Plani hazirla", disabled=not options["collection"], width="stretch"
         )
     with actions[1]:
-        do_create = st.button("Tablolari olustur", disabled=not ready, width="stretch")
+        do_create = st.button(
+            "Tablolari olustur",
+            disabled=not ready or options["mode"] == "incremental",
+            width="stretch",
+        )
     with actions[2]:
         do_write = st.button(
-            "Veriyi yaz", type="primary", disabled=not ready, width="stretch"
+            write_label, type="primary", disabled=not ready, width="stretch"
         )
 
     if do_plan or do_create or do_write:

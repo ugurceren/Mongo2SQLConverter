@@ -75,3 +75,32 @@ def save_connection_overrides(
         encoding="utf-8",
     )
     return LOCAL_CONFIG_PATH
+
+
+def load_sync_watermark(collection: str) -> dict[str, str] | None:
+    state = (_read_yaml(LOCAL_CONFIG_PATH).get("sync") or {}).get(collection)
+    if not isinstance(state, dict) or not state.get("last_id"):
+        return None
+    return {
+        "last_id": str(state["last_id"]),
+        "last_id_type": str(state.get("last_id_type") or "objectid"),
+        "updated": str(state.get("updated") or ""),
+    }
+
+
+def save_sync_watermark(collection: str, last_id: str, last_id_type: str) -> Path:
+    from datetime import datetime, timezone
+
+    local = _read_yaml(LOCAL_CONFIG_PATH)
+    sync = dict(local.get("sync") or {})
+    sync[collection] = {
+        "last_id": last_id,
+        "last_id_type": last_id_type,
+        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    local["sync"] = sync
+    LOCAL_CONFIG_PATH.write_text(
+        yaml.safe_dump(local, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return LOCAL_CONFIG_PATH

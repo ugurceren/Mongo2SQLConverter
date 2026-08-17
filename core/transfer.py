@@ -20,9 +20,10 @@ from typing import Any, Callable, Iterator, Sequence
 
 from bson import Binary, Decimal128, ObjectId, json_util
 
-from core.inspect import ddl_statements, iter_from_mongo, key_column_type, sql_ident
-from core.mongo import MongoClientWrapper
+from core.inspect import ddl_statements, key_column_type, sql_ident
+from core.mongo import MongoClientWrapper, encode_mongo_id
 from core.mssql import MssqlConnection
+from core.textutil import clip_utf16, utf16_len
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -62,6 +63,54 @@ def retarget_plan(
 
 def plan_tables(plan: dict[str, Any]) -> list[str]:
     return [plan["root"]["table"], *(child["table"] for child in plan["children"])]
+
+
+def _narrow_sql_type(sql_type: str, live_width: int | None) -> str:
+    """Clip writes to the table's real NVARCHAR/CHAR width so INSERT cannot 22001."""
+    if live_width is None:
+        return sql_type
+    base = sql_type.split("(", 1)[0]
+    if base.upper() not in {"NVARCHAR", "NCHAR", "VARCHAR", "CHAR"}:
+        return sql_type
+    planned = _width_of(sql_type)
+    width = live_width if planned is None else min(planned, live_width)
+    return f"{base}({width})"
+
+
+def _apply_column_width(column: dict[str, Any], widths: dict[str, int | None]) -> dict[str, Any]:
+    if column["name"] not in widths:
+        return column
+    out = dict(column)
+    out["sql_type"] = _narrow_sql_type(column["sql_type"], widths[column["name"]])
+    return out
+
+
+def bind_plan_to_tables(target: MssqlConnection, plan: dict[str, Any]) -> dict[str, Any]:
+    """
+    Existing tables may be narrower than this run's profile (sample vs full scan).
+    Shrink the plan to the live column widths so coerce() clips before INSERT.
+    """
+    schema = plan["schema"]
+    root_widths = target.column_char_widths(schema, plan["root"]["table"])
+    out = dict(plan)
+    root = dict(plan["root"])
+    if root_widths:
+        root["columns"] = [_apply_column_width(c, root_widths) for c in plan["root"]["columns"]]
+    out["root"] = root
+
+    children = []
+    for child in plan["children"]:
+        renamed = dict(child)
+        live = target.column_char_widths(schema, child["table"])
+        if live:
+            if child["kind"] == "map":
+                renamed["key_column"] = _apply_column_width(child["key_column"], live)
+                renamed["value_column"] = _apply_column_width(child["value_column"], live)
+            else:
+                renamed["columns"] = [_apply_column_width(c, live) for c in child["columns"]]
+        children.append(renamed)
+    out["children"] = children
+    return out
 
 
 def relax_nullability(plan: dict[str, Any]) -> dict[str, Any]:
@@ -197,8 +246,8 @@ def coerce(value: Any, sql_type: str) -> tuple[Any, bool]:
 
     text = _text_of(value)
     width = _width_of(sql_type)
-    if width is not None and len(text) > width:
-        return text[:width], True
+    if width is not None and utf16_len(text) > width:
+        return clip_utf16(text, width), True
     return text, False
 
 
@@ -275,6 +324,9 @@ class TransferStats:
     skipped_no_id: int = 0
     truncated: int = 0
     rows: dict[str, int] = field(default_factory=dict)
+    last_id: str | None = None
+    last_id_type: str | None = None
+    mode: str = "full"
 
     def add_rows(self, table: str, count: int) -> None:
         if count:
@@ -402,9 +454,17 @@ def transfer_collection(
     sample: int = 0,
     batch_size: int = 500,
     clear_first: bool = False,
+    query: dict[str, Any] | None = None,
+    mode: str = "full",
     progress: ProgressCallback | None = None,
 ) -> TransferStats:
-    """Stream a collection into the plan's tables, batch by batch."""
+    """Stream a collection into the plan's tables, batch by batch.
+
+    `sample` is only for a capped write (tests). Production full/incremental
+    passes 0 and uses `query` (`None` = all docs, or `{_id: {$gt: ...}}`).
+    Documents are read in `_id` order so the watermark is the last written id.
+    """
+    plan = bind_plan_to_tables(target, plan)
     schema = plan["schema"]
     root_table = plan["root"]["table"]
     key_type = key_column_type(plan)
@@ -417,7 +477,7 @@ def transfer_collection(
             target.clear_table(schema, child["table"])
         target.clear_table(schema, root_table)
 
-    stats = TransferStats()
+    stats = TransferStats(mode=mode)
     expected = sample or None
 
     keys: list[Any] = []
@@ -435,16 +495,31 @@ def transfer_collection(
                 if rows:
                     stats.add_rows(table, target.insert_rows(schema, table, columns, rows))
             target.commit()
-        except Exception:
+        except Exception as exc:
             target.rollback()
+            message = str(exc)
+            if "22001" in message or "truncated" in message.lower():
+                raise RuntimeError(
+                    "SQL Server bir degeri kolon genisligine sigdiramadi (22001). "
+                    "Full sync ile 'Tablolari yeniden olustur' ve ornek 0 kullanin."
+                ) from exc
             raise
         keys.clear()
         root_rows.clear()
         for rows in child_rows.values():
             rows.clear()
 
-    for doc in iter_from_mongo(mongo, collection, sample):
+    for doc in mongo.iter_documents(
+        collection,
+        sample=sample,
+        batch_size=batch_size,
+        query=query,
+        sort_by_id=not sample,
+    ):
         stats.documents += 1
+        encoded = encode_mongo_id(doc.get("_id"))
+        if encoded:
+            stats.last_id, stats.last_id_type = encoded
         key, row, children, truncated = flatten_document(doc, plan, key_type)
         stats.truncated += truncated
         if key is None:

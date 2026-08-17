@@ -1,11 +1,12 @@
-"""MongoDB access for schema profiling (no sync/watermark logic)."""
+"""MongoDB access for schema profiling and document iteration."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any, Iterator
 
-from pymongo import MongoClient
+from bson import ObjectId
+from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
@@ -71,26 +72,69 @@ class MongoClientWrapper:
     def collection(self, name: str) -> Collection:
         return self.db[name]
 
+    def estimated_count(self, collection: str, query: dict[str, Any] | None = None) -> int:
+        col = self.collection(collection)
+        if query:
+            return int(col.count_documents(query))
+        try:
+            return int(col.estimated_document_count())
+        except Exception:
+            return int(col.count_documents({}))
+
     def iter_documents(
         self,
         collection: str,
         *,
         sample: int = 0,
         batch_size: int = 500,
+        query: dict[str, Any] | None = None,
+        sort_by_id: bool = False,
     ) -> Iterator[dict[str, Any]]:
         col = self.collection(collection)
+        match = query or {}
         if sample:
-            cursor = col.aggregate([{"$sample": {"size": sample}}], allowDiskUse=True)
-            yield from cursor
+            pipeline: list[dict[str, Any]] = []
+            if match:
+                pipeline.append({"$match": match})
+            pipeline.append({"$sample": {"size": sample}})
+            yield from col.aggregate(pipeline, allowDiskUse=True)
             return
 
-        cursor = col.find({}, no_cursor_timeout=True).batch_size(batch_size)
+        cursor = col.find(match, no_cursor_timeout=True)
+        if sort_by_id:
+            cursor = cursor.sort("_id", ASCENDING)
+        cursor = cursor.batch_size(batch_size)
         count = 0
         try:
             for doc in cursor:
                 count += 1
                 if count % 1000 == 0:
-                    logger.info("profiled %s documents", count)
+                    logger.info("read %s documents from %s", count, collection)
                 yield doc
         finally:
             cursor.close()
+
+
+def encode_mongo_id(value: Any) -> tuple[str, str] | None:
+    """Serialize `_id` so an incremental run can resume after it."""
+    if value is None:
+        return None
+    if isinstance(value, ObjectId):
+        return str(value), "objectid"
+    if isinstance(value, bool):
+        return str(value), "str"
+    if isinstance(value, int):
+        return str(value), "int"
+    return str(value), "str"
+
+
+def decode_mongo_id(raw: str, kind: str) -> Any:
+    if kind == "objectid":
+        return ObjectId(raw)
+    if kind == "int":
+        return int(raw)
+    return raw
+
+
+def id_after_filter(last_id: Any) -> dict[str, Any]:
+    return {"_id": {"$gt": last_id}}

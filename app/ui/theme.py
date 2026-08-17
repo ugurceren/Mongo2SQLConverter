@@ -80,6 +80,21 @@ CSS = """
     font-size: 0.85rem;
     margin: 0 0 0.9rem 0;
 }
+.m2s-section-kicker {
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #7af0ff;
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+}
+.m2s-section-title {
+    font-size: 1.45rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    margin: 0 0 0.35rem 0;
+}
 
 /* ---------- sidebar ---------- */
 section[data-testid="stSidebar"] {
@@ -245,6 +260,24 @@ section[data-testid="stSidebar"] {
     background-color: rgba(76, 141, 255, 0.24) !important;
     border-color: rgba(76, 141, 255, 0.7) !important;
 }
+.st-key-disc_database_drdl button {
+    min-height: 3rem !important;
+    font-size: 1.05rem !important;
+    font-weight: 750 !important;
+    letter-spacing: 0.02em;
+    background: linear-gradient(135deg, #4c8dff, #22d3ee) !important;
+    color: #041018 !important;
+    border: 0 !important;
+    box-shadow: 0 8px 22px rgba(34, 211, 238, 0.28);
+}
+.st-key-disc_database_drdl button:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 10px 28px rgba(34, 211, 238, 0.4);
+}
+.st-key-disc_database_drdl button:disabled {
+    opacity: 0.45 !important;
+    box-shadow: none !important;
+}
 
 [data-testid="stMetricLabel"] p {
     font-size: 0.74rem !important;
@@ -322,6 +355,16 @@ def page_header(eyebrow: str, title: str, lede: str) -> None:
         f'<p class="m2s-lede">{lede}</p>',
         unsafe_allow_html=True,
     )
+
+
+def section_heading(kicker: str, title: str, hint: str | None = None) -> None:
+    st.markdown(
+        f'<div class="m2s-section-kicker">{kicker}</div>'
+        f'<h2 class="m2s-section-title">{title}</h2>',
+        unsafe_allow_html=True,
+    )
+    if hint:
+        st.markdown(f'<p class="m2s-card-hint">{hint}</p>', unsafe_allow_html=True)
 
 
 def card_title(title: str, hint: str | None = None) -> None:

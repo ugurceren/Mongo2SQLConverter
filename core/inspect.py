@@ -300,7 +300,10 @@ def _type_breakdown(concrete: dict[str, int]) -> str:
 
 
 def sql_type_for(
-    stat: FieldStats, headroom: float, shape_conflict: bool = False
+    stat: FieldStats,
+    headroom: float,
+    shape_conflict: bool = False,
+    as_json: bool = False,
 ) -> tuple[str, list[str]]:
     """Proposed column type plus any notes worth surfacing in the report."""
     notes: list[str] = []
@@ -308,14 +311,13 @@ def sql_type_for(
     if not concrete:
         return "NVARCHAR(16)", ["yalnizca null gorunmus"]
 
-    if shape_conflict:
-        # Sometimes an object, sometimes a scalar. Splitting it into columns and
-        # also keeping the parent would store the same data twice, so the whole
-        # value is kept as JSON and the subtree is dropped.
-        return "NVARCHAR(MAX)", [
-            f"sekil cakismasi ({_type_breakdown(concrete)}): JSON olarak saklanir, "
-            "alt alanlar ayri kolon yapilmadi"
-        ]
+    if as_json or shape_conflict:
+        reason = (
+            "JSON kolon"
+            if as_json
+            else f"sekil cakismasi ({_type_breakdown(concrete)})"
+        )
+        return "NVARCHAR(MAX)", [f"{reason}: alt alanlar ayri kolon yapilmadi"]
 
     kinds = set(concrete)
 
@@ -381,9 +383,101 @@ def drdl_type(sql: str) -> str:
     return DRDL_TYPES.get(base, "varchar")
 
 
-# --------------------------------------------------------------------------
-# table plan
-# --------------------------------------------------------------------------
+NESTING_DEEP = "deep"
+NESTING_HYBRID = "hybrid"
+NESTING_COLUMNS = "columns"
+NESTING_DOCUMENT = "document"
+
+NESTING_OPTIONS = (
+    (
+        NESTING_DEEP,
+        "Derin iliskisel",
+        "Diziler child tablo, nesneler kolon. En ince kirilim; en cok tablo.",
+    ),
+    (
+        NESTING_HYBRID,
+        "Hibrit",
+        "Kok diziler child tablo; daha derin ic ice yapilar JSON kolon.",
+    ),
+    (
+        NESTING_COLUMNS,
+        "Tek tablo + JSON",
+        "Bir dokuman = bir satir. Ust seviye skalerler kolon, nesne ve diziler JSON.",
+    ),
+    (
+        NESTING_DOCUMENT,
+        "Birebir dokuman",
+        "Tek tablo: mongo_id + document JSON. Sema yok, birebir kopya.",
+    ),
+)
+
+
+def nesting_labels() -> dict[str, str]:
+    return {key: title for key, title, _ in NESTING_OPTIONS}
+
+
+def is_top_level(path: str) -> bool:
+    return "." not in path and "[]" not in path
+
+
+def describe_shape(profile: Profile) -> dict[str, Any]:
+    """What nesting this collection actually has (from a profile)."""
+    top_arrays: list[str] = []
+    nested_arrays: list[str] = []
+    top_objects: list[str] = []
+    nested_objects: list[str] = []
+    for stat in profile.stats.values():
+        if stat.dominant_type == "array":
+            (top_arrays if is_top_level(stat.path) else nested_arrays).append(stat.path)
+        elif stat.dominant_type == "object" and profile.children_of(stat.path):
+            (top_objects if is_top_level(stat.path) else nested_objects).append(stat.path)
+    return {
+        "documents": profile.documents,
+        "top_arrays": sorted(top_arrays),
+        "nested_arrays": sorted(nested_arrays),
+        "top_objects": sorted(top_objects),
+        "nested_objects": sorted(nested_objects),
+    }
+
+
+def nesting_keys_for(shape: dict[str, Any] | None) -> tuple[list[str], str]:
+    """
+    Which strategies are meaningful for this shape, plus a default.
+
+    Flat collections do not need child-table modes. Hybrid only differs from
+    deep when there are both top-level arrays and deeper nesting.
+    """
+    if not shape:
+        keys = [item[0] for item in NESTING_OPTIONS]
+        return keys, NESTING_HYBRID
+    has_top_array = bool(shape.get("top_arrays"))
+    has_deep = bool(shape.get("nested_arrays") or shape.get("nested_objects"))
+    has_object = bool(shape.get("top_objects") or shape.get("nested_objects"))
+    if has_top_array and has_deep:
+        return [NESTING_DEEP, NESTING_HYBRID, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_HYBRID
+    if has_top_array:
+        return [NESTING_DEEP, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_DEEP
+    if has_object:
+        return [NESTING_DEEP, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_COLUMNS
+    return [NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_COLUMNS
+
+
+def shape_caption(shape: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if shape.get("top_arrays"):
+        names = ", ".join(f"`{name}`" for name in shape["top_arrays"][:6])
+        extra = f" +{len(shape['top_arrays']) - 6}" if len(shape["top_arrays"]) > 6 else ""
+        parts.append(f"kok dizi: {names}{extra}")
+    if shape.get("nested_arrays"):
+        parts.append(f"{len(shape['nested_arrays'])} ic ice dizi")
+    if shape.get("top_objects"):
+        names = ", ".join(f"`{name}`" for name in shape["top_objects"][:4])
+        parts.append(f"kok nesne: {names}")
+    if shape.get("nested_objects"):
+        parts.append(f"{len(shape['nested_objects'])} ic ice nesne")
+    if not parts:
+        return "Bu collection duz gorunuyor: skaler alanlar + istege bagli JSON kopya."
+    return "Bu collection'da " + "; ".join(parts) + "."
 
 
 def sql_ident(raw: str) -> str:
@@ -443,15 +537,14 @@ def build_plan(
     maps: dict[str, dict[str, Any]],
     headroom: float,
     table_prefix: str | None = None,
+    nesting: str = NESTING_DEEP,
 ) -> dict[str, Any]:
-    map_prefixes = set(maps)
+    if nesting not in {item[0] for item in NESTING_OPTIONS}:
+        nesting = NESTING_DEEP
     root_table = sql_ident(collection)
     child_prefix = sql_ident(table_prefix) if table_prefix else root_table
     parent_key = parent_key_name(collection)
 
-    # Fields that are an object in some documents and a scalar in others. The
-    # parent is kept as JSON and its subtree dropped, so the same value is not
-    # stored twice.
     shape_conflicts = {
         stat.path
         for stat in profile.stats.values()
@@ -459,21 +552,98 @@ def build_plan(
         and stat.concrete_types
         and set(stat.concrete_types) - {"object"}
     }
+    json_parents = set(shape_conflicts)
+
+    if nesting == NESTING_DOCUMENT:
+        id_stat = profile.stats.get("_id")
+        id_sql = "NVARCHAR(450)"
+        id_notes: list[str] = []
+        if id_stat:
+            id_sql, id_notes = sql_type_for(id_stat, headroom)
+            if id_sql == "NVARCHAR(MAX)":
+                id_sql = f"NVARCHAR({INDEX_KEY_LIMIT})"
+        columns = [
+            {
+                "path": "_id",
+                "name": "mongo_id",
+                "sql_type": id_sql,
+                "nullable": False,
+                "fill": 1.0,
+                "present": profile.documents,
+                "types": id_stat.concrete_types if id_stat else {"objectId": profile.documents},
+                "max_utf16": id_stat.max_utf16 if id_stat else 24,
+                "notes": id_notes,
+                "longest_sample": id_stat.longest_sample if id_stat else "",
+                "distinct": None,
+            },
+            {
+                "path": "",
+                "name": "document",
+                "sql_type": "NVARCHAR(MAX)",
+                "nullable": True,
+                "fill": 1.0,
+                "present": profile.documents,
+                "types": {"object": profile.documents},
+                "max_utf16": 0,
+                "notes": ["tum dokuman JSON olarak saklanir"],
+                "longest_sample": "",
+                "distinct": None,
+            },
+        ]
+        return {
+            "schema": schema,
+            "collection": collection,
+            "documents": profile.documents,
+            "nesting": nesting,
+            "root": {"table": root_table, "key_column": "mongo_id", "columns": columns},
+            "children": [],
+        }
+
+    if nesting == NESTING_COLUMNS:
+        for stat in profile.stats.values():
+            if is_top_level(stat.path) and stat.dominant_type in {"object", "array"}:
+                json_parents.add(stat.path)
+        maps = {}
+    elif nesting == NESTING_HYBRID:
+        for stat in profile.stats.values():
+            if is_top_level(stat.path) and stat.dominant_type == "object" and profile.children_of(stat.path):
+                json_parents.add(stat.path)
+            if stat.dominant_type == "array" and not is_top_level(stat.path):
+                json_parents.add(stat.path)
+            owner = owner_prefix(stat.path, set())
+            if owner.endswith("[]") and stat.dominant_type == "object" and profile.children_of(stat.path):
+                json_parents.add(stat.path)
+        maps = {}
+
+    map_prefixes = set(maps)
 
     def suppressed(path: str) -> bool:
-        return any(path.startswith(conflict + ".") for conflict in shape_conflicts)
+        for parent in json_parents:
+            if path.startswith(parent + ".") or path.startswith(parent + "[]"):
+                return True
+        return False
 
     map_prefixes = {prefix for prefix in map_prefixes if not suppressed(prefix)}
 
-    # Arrays become child tables; their element prefix owns the element columns.
-    array_paths = [
-        stat.path
-        for stat in profile.stats.values()
-        if stat.dominant_type == "array"
-        and owner_prefix(stat.path, map_prefixes) not in map_prefixes
-        and not suppressed(stat.path)
-        and stat.path not in shape_conflicts
-    ]
+    array_paths: list[str] = []
+    if nesting == NESTING_DEEP:
+        array_paths = [
+            stat.path
+            for stat in profile.stats.values()
+            if stat.dominant_type == "array"
+            and owner_prefix(stat.path, map_prefixes) not in map_prefixes
+            and not suppressed(stat.path)
+            and stat.path not in json_parents
+        ]
+    elif nesting == NESTING_HYBRID:
+        array_paths = [
+            stat.path
+            for stat in profile.stats.values()
+            if stat.dominant_type == "array"
+            and is_top_level(stat.path)
+            and not suppressed(stat.path)
+            and stat.path not in json_parents
+        ]
 
     groups: dict[str, list[FieldStats]] = {"": []}
     for array_path in array_paths:
@@ -485,20 +655,26 @@ def build_plan(
         owner = owner_prefix(stat.path, map_prefixes)
         if owner in map_prefixes:
             continue
-        if stat.path in shape_conflicts:
+        if stat.path in json_parents:
             groups.setdefault(owner, []).append(stat)
             continue
         if stat.dominant_type == "object" and profile.children_of(stat.path):
-            continue  # flattened into its leaves
+            continue
         if stat.dominant_type == "array":
-            continue  # becomes its own table
+            continue
         groups.setdefault(owner, []).append(stat)
 
     def columns_for(owner: str) -> list[dict[str, Any]]:
         out = []
         used: set[str] = set()
         for stat in groups.get(owner, []):
-            sql, notes = sql_type_for(stat, headroom, stat.path in shape_conflicts)
+            as_json = stat.path in json_parents and stat.path not in shape_conflicts
+            sql, notes = sql_type_for(
+                stat,
+                headroom,
+                stat.path in shape_conflicts,
+                as_json=as_json,
+            )
             name = column_name(stat.path, owner)
             while name in used:
                 name = name + "_x"
@@ -538,40 +714,40 @@ def build_plan(
             }
         )
 
-    for map_path, info in sorted(maps.items()):
-        if map_path not in map_prefixes:
-            continue
-        base = sql_ident(map_path.replace("[]", "").replace(".", "_"))
-        value_kinds = set(info["value_types"])
-        # A map's key set is open-ended by definition, so the observed maximum is
-        # a weaker predictor here than for a fixed column. Both sides get a floor.
-        value_type = (
-            "NVARCHAR(MAX)"
-            if value_kinds - {"string"}
-            else nvarchar_width(max(info["value_max_utf16"], 170), headroom)
-        )
-        children.append(
-            {
-                "table": f"{child_prefix}_{base}",
-                "kind": "map",
-                "source": map_path,
-                "parent_key": parent_key,
-                "key_column": {
-                    "name": f"{base}_key",
-                    "sql_type": nvarchar_width(max(info["key_max_utf16"], 85), headroom),
-                },
-                "value_column": {"name": f"{base}_value", "sql_type": value_type},
-                "keys_seen": info["keys"],
-                "avg_fill": info["avg_fill"],
-                "value_types": info["value_types"],
-                "columns": [],
-            }
-        )
+    if nesting == NESTING_DEEP:
+        for map_path, info in sorted(maps.items()):
+            if map_path not in map_prefixes:
+                continue
+            base = sql_ident(map_path.replace("[]", "").replace(".", "_"))
+            value_kinds = set(info["value_types"])
+            value_type = (
+                "NVARCHAR(MAX)"
+                if value_kinds - {"string"}
+                else nvarchar_width(max(info["value_max_utf16"], 170), headroom)
+            )
+            children.append(
+                {
+                    "table": f"{child_prefix}_{base}",
+                    "kind": "map",
+                    "source": map_path,
+                    "parent_key": parent_key,
+                    "key_column": {
+                        "name": f"{base}_key",
+                        "sql_type": nvarchar_width(max(info["key_max_utf16"], 85), headroom),
+                    },
+                    "value_column": {"name": f"{base}_value", "sql_type": value_type},
+                    "keys_seen": info["keys"],
+                    "avg_fill": info["avg_fill"],
+                    "value_types": info["value_types"],
+                    "columns": [],
+                }
+            )
 
     return {
         "schema": schema,
         "collection": collection,
         "documents": profile.documents,
+        "nesting": nesting,
         "root": {"table": root_table, "key_column": "mongo_id", "columns": columns_for("")},
         "children": children,
     }
@@ -853,12 +1029,15 @@ def profile_collection(
     map_min_keys: int,
     map_max_fill: float,
     headroom: float,
+    nesting: str = NESTING_DEEP,
 ) -> tuple[Profile, dict[str, Any]]:
     profile = Profile()
     for doc in iter_from_mongo(source, collection, sample):
         profile.add_document(doc)
     maps = detect_map_prefixes(profile, map_min_keys, map_max_fill)
-    return profile, build_plan(profile, collection, schema, maps, headroom)
+    return profile, build_plan(
+        profile, collection, schema, maps, headroom, nesting=nesting
+    )
 
 
 # --------------------------------------------------------------------------
@@ -915,6 +1094,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.2,
         help="Maximum average key fill ratio for the map heuristic.",
+    )
+    parser.add_argument(
+        "--nesting",
+        choices=[item[0] for item in NESTING_OPTIONS],
+        default=NESTING_DEEP,
+        help="How nested objects/arrays become tables: "
+        "deep (child tables), hybrid (top arrays + JSON), "
+        "columns (one table, nested JSON), document (mongo_id + JSON).",
     )
     parser.add_argument("--progress-every", type=int, default=1000)
     return parser
@@ -975,7 +1162,15 @@ def main() -> int:
         return 1
 
     maps = detect_map_prefixes(profile, args.map_min_keys, args.map_max_fill)
-    plan = build_plan(profile, collection, schema, maps, args.headroom, args.table_prefix)
+    plan = build_plan(
+        profile,
+        collection,
+        schema,
+        maps,
+        args.headroom,
+        args.table_prefix,
+        nesting=args.nesting,
+    )
 
     print_report(plan, profile, args.sample or None)
 
