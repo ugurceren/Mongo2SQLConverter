@@ -21,7 +21,7 @@ SAVE_FLASH = "conn_saved"
 # Suggestions only — never written to config.yaml.
 HINT_MONGO_URI = "mongodb://localhost:27017"
 HINT_MONGO_DB = "mydb"
-HINT_MONGO_USER = "kullanici"
+HINT_MONGO_USER = "kullanıcı"
 HINT_SQL_SERVER = "localhost"
 HINT_SQL_DB = "MyWarehouse"
 HINT_SQL_SCHEMA = "dbo"
@@ -37,7 +37,7 @@ def _show_saved() -> None:
     label = st.session_state.pop(SAVE_FLASH, None)
     if not label:
         return
-    st.success(f"**{label}** ayarlari kaydedildi.")
+    st.success(f"**{label}** ayarları kaydedildi.")
     st.caption(str(LOCAL_CONFIG_PATH))
 
 
@@ -47,20 +47,20 @@ def _test_mongo(mongo_cfg: dict) -> None:
         info = mongo.test()
         collections = info["collections"]
         st.success(
-            f"Baglanti kuruldu — `{info['database']}` ({len(collections)} collection)"
+            f"Bağlantı kuruldu — `{info['database']}` ({len(collections)} koleksiyon)"
         )
         if collections:
             preview = ", ".join(collections[:12])
             extra = f" … +{len(collections) - 12}" if len(collections) > 12 else ""
-            st.caption(f"Collection'lar: {preview}{extra}")
+            st.caption(f"Koleksiyonlar: {preview}{extra}")
         else:
             st.warning(
-                f"`{info['database']}` icinde collection yok. Database adi yanlis olabilir."
+                f"`{info['database']}` içinde koleksiyon yok. Veritabanı adı yanlış olabilir."
             )
         if info["databases"]:
-            st.caption("Erisebilir database'ler: " + ", ".join(info["databases"]))
+            st.caption("Erişilebilir veritabanları: " + ", ".join(info["databases"]))
     except Exception as exc:
-        st.error(f"Baglanti kurulamadi: {exc}")
+        st.error(f"Bağlantı kurulamadı: {exc}")
     finally:
         mongo.close()
 
@@ -69,9 +69,9 @@ def _test_sql(target: MssqlConnection) -> None:
     try:
         target.connect()
         login, database = target.test()
-        st.success(f"Baglanti kuruldu — {database} / login: {login}")
+        st.success(f"Bağlantı kuruldu — {database} / oturum: {login}")
     except Exception as exc:
-        st.error(f"Baglanti kurulamadi: {exc}")
+        st.error(f"Bağlantı kurulamadı: {exc}")
     finally:
         target.close()
 
@@ -81,40 +81,40 @@ def _mongo_card(settings: Settings) -> None:
         theme.section_heading(
             "Kaynak",
             "MongoDB",
-            "Sema kesfi ve aktarim icin okunan veritabani. Zorunlu. "
-            "Gri yazi ornektir; Kaydet'e basinca config.local.yaml yazar.",
+            "Şema keşfi ve aktarım için okunan veritabanı. Zorunlu. "
+            "Gri yazı örnektir; Kaydet'e basınca config.local.yaml yazar.",
         )
         with st.form("mongo_conn"):
             left, right = st.columns(2)
             with left:
                 uri = st.text_input(
-                    "Baglanti URI",
+                    "Bağlantı URI",
                     value=settings.mongo.get("uri") or "",
                     placeholder=HINT_MONGO_URI,
                 )
                 database = st.text_input(
-                    "Database",
+                    "Veritabanı",
                     value=settings.mongo.get("database") or "",
                     placeholder=HINT_MONGO_DB,
                 )
             with right:
                 user = st.text_input(
-                    "Kullanici",
+                    "Kullanıcı",
                     value=settings.mongo.get("username") or "",
                     placeholder=HINT_MONGO_USER,
                 )
                 password = st.text_input(
-                    "Sifre",
+                    "Şifre",
                     type="password",
-                    placeholder="kayitli — degistirmek icin yazin"
+                    placeholder="kayıtlı — değiştirmek için yazın"
                     if settings.mongo_password
-                    else "bos birakin veya yazin",
-                    help="Bos birakilirsa kayitli sifre korunur. Oneri gosterilmez.",
+                    else "boş bırakın veya yazın",
+                    help="Boş bırakılırsa kayıtlı şifre korunur. Öneri gösterilmez.",
                 )
             actions = st.columns([1, 1, 2])
             with actions[0]:
                 do_test = st.form_submit_button(
-                    "Test connection", key="mongo_test", width="stretch"
+                    "Bağlantıyı dene", key="mongo_test", width="stretch"
                 )
             with actions[1]:
                 do_save = st.form_submit_button(
@@ -145,8 +145,8 @@ def _sql_card(settings: Settings) -> None:
         theme.section_heading(
             "Hedef",
             "SQL Server",
-            "Yalnizca veri aktarirken gerekir. Sema kesfi bu baglantiyi kullanmaz. "
-            "Gri yazi ornektir; gercek degerleri siz yazin.",
+            "Yalnızca veri aktarırken gerekir. Şema keşfi bu bağlantıyı kullanmaz. "
+            "Gri yazı örnektir; gerçek değerleri siz yazın.",
         )
         trusted_default = bool(settings.mssql.get("trusted_connection", True))
         if "sql_auth" not in st.session_state:
@@ -154,62 +154,62 @@ def _sql_card(settings: Settings) -> None:
 
         left, right = st.columns(2)
         with left:
-            st.markdown("**Yazilacak yer**")
+            st.markdown("**Yazılacak yer**")
             server = st.text_input(
                 "Sunucu",
                 value=settings.mssql.get("server") or "",
                 placeholder=HINT_SQL_SERVER,
             )
             database = st.text_input(
-                "Database",
+                "Veritabanı",
                 value=settings.mssql.get("database") or "",
                 placeholder=HINT_SQL_DB,
             )
             schema = st.text_input(
-                "Sema",
+                "Şema",
                 value=settings.mssql.get("schema") or "",
                 placeholder=HINT_SQL_SCHEMA,
             )
         with right:
-            st.markdown("**Kimlik dogrulama**")
+            st.markdown("**Kimlik doğrulama**")
             drivers = available_drivers()
             current = settings.mssql.get("driver") or drivers[0]
             driver = st.selectbox(
-                "ODBC surucu",
+                "ODBC sürücü",
                 drivers,
                 index=drivers.index(current) if current in drivers else 0,
             )
             auth = st.radio(
-                "Yontem",
+                "Yöntem",
                 ("Windows", "SQL Server"),
                 horizontal=True,
                 key="sql_auth",
             )
             windows = auth == "Windows"
             user = st.text_input(
-                "Kullanici",
+                "Kullanıcı",
                 value=settings.mssql.get("username") or "",
                 placeholder=HINT_SQL_USER,
                 disabled=windows,
             )
             password = st.text_input(
-                "Sifre",
+                "Şifre",
                 type="password",
                 disabled=windows,
                 placeholder="Windows oturumu"
                 if windows
                 else (
-                    "kayitli — degistirmek icin yazin"
+                    "kayıtlı — değiştirmek için yazın"
                     if settings.mssql_password
-                    else "bos"
+                    else "boş"
                 ),
             )
             if windows:
-                st.caption("Windows oturumu kullanilir; kullanici ve sifre gerekmez.")
+                st.caption("Windows oturumu kullanılır; kullanıcı ve şifre gerekmez.")
 
         actions = st.columns([1, 1, 2])
         with actions[0]:
-            do_test = st.button("Test connection", key="sql_test", width="stretch")
+            do_test = st.button("Bağlantıyı dene", key="sql_test", width="stretch")
         with actions[1]:
             do_save = st.button("Kaydet", type="primary", key="sql_save", width="stretch")
 
@@ -245,13 +245,13 @@ def _sql_card(settings: Settings) -> None:
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Yapilandirma",
-        "Baglantilar",
-        "Kaynak ve hedef ayri tutulur: Mongo olmadan hicbir sey calismaz, SQL yalnizca "
-        "veri yazarken devreye girer. Kaydet, degerleri asagidaki dosyaya yazar.",
+        "Yapılandırma",
+        "Bağlantılar",
+        "Kaynak ve hedef ayrı tutulur: Mongo olmadan hiçbir şey çalışmaz, SQL yalnızca "
+        "veri yazarken devreye girer. Kaydet, değerleri aşağıdaki dosyaya yazar.",
         step="connections",
     )
-    st.caption(f"Kayit dosyasi · `{LOCAL_CONFIG_PATH}`  ·  git'e eklenmez")
+    st.caption(f"Kayıt dosyası · `{LOCAL_CONFIG_PATH}`  ·  git'e eklenmez")
     _show_saved()
     _mongo_card(settings)
     st.write("")
@@ -260,7 +260,7 @@ def render(settings: Settings) -> None:
         st.write("")
         theme.page_cta(
             "discovery",
-            "Sema kesfine gec",
+            "Şema keşfine geç",
             ":material/schema:",
             "cta_to_discovery",
         )

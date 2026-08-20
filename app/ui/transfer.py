@@ -48,33 +48,33 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
     with st.container(border=True):
         theme.card_title(
             "Hedef",
-            "Once collection ve kok tabloyu secin. Kirilim sonra sorulur.",
+            "Önce koleksiyon ve kök tabloyu seçin. Kırılım sonra sorulur.",
         )
         row = st.columns([2.2, 1.6, 1.6], vertical_alignment="bottom")
         with row[0]:
             if collections:
                 collection = st.selectbox(
-                    "Kaynak collection",
+                    "Kaynak koleksiyon",
                     options=collections,
                     index=None,
-                    placeholder="Collection secin...",
+                    placeholder="Koleksiyon seçin...",
                     key="tr_collection",
                 )
             else:
                 collection = None
-                st.selectbox("Kaynak collection", options=["Collection yok"], disabled=True)
+                st.selectbox("Kaynak koleksiyon", options=["Koleksiyon yok"], disabled=True)
         with row[1]:
-            schema = st.text_input("Hedef sema", value=settings.schema, key="tr_schema")
+            schema = st.text_input("Hedef şema", value=settings.schema, key="tr_schema")
         with row[2]:
             table = st.text_input(
-                "Kok tablo",
+                "Kök tablo",
                 value=sql_ident(collection) if collection else "",
                 key=f"tr_table_{collection or 'none'}",
                 disabled=not collection,
-                help="Child tablolar bu addan turer: <ad>_<alan>.",
+                help="Alt tablolar bu addan türer: <ad>_<alan>.",
             )
         if not collection:
-            st.caption("Collection secildikten sonra ic ice yapi sorulur.")
+            st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
 
     options["collection"] = collection
     options["schema"] = (schema or "").strip() or settings.schema
@@ -89,63 +89,63 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
 
     st.write("")
     with st.container(border=True):
-        theme.card_title("Senkron", "Yazma sekli ve profil ayarlari.")
+        theme.card_title("Senkron", "Yazma şekli ve profil ayarları.")
         mode = st.radio(
             "Senkron",
-            ("Full sync", "Incremental"),
+            ("Tam senkron", "Artımlı"),
             horizontal=True,
-            key="tr_mode",
-            help="Full: tum dokumanlar. Incremental: son kaydedilen `_id` sonrasi yeni kayitlar.",
+            key="tr_sync_kind",
+            help="Tam: tüm belgeler. Artımlı: son kaydedilen `_id` sonrası yeni kayıtlar.",
         )
-        incremental = mode == "Incremental"
+        incremental = mode == "Artımlı"
         watermark = load_sync_watermark(collection)
 
         if incremental:
             if watermark:
                 st.caption(
-                    f"Son watermark · `_id` > `{watermark['last_id']}`"
+                    f"Son işaret · `_id` > `{watermark['last_id']}`"
                     + (f" · {watermark['updated']}" if watermark.get("updated") else "")
                 )
             else:
                 st.warning(
-                    "Bu collection icin watermark yok. Once **Full sync** calistirin, "
-                    "ya da incremental ilk seferde tum dokumanlari okur."
+                    "Bu koleksiyon için işaret yok. Önce **Tam senkron** çalıştırın, "
+                    "ya da artımlı ilk seferde tüm belgeleri okur."
                 )
         else:
             st.caption(
-                "Full sync tum dokumanlari yazar. Silinen Mongo kayitlari SQL'den de dussun "
-                "istiyorsaniz tablolari bosaltin veya yeniden olusturun."
+                "Tam senkron tüm belgeleri yazar. Silinen Mongo kayıtları SQL'den de düşsün "
+                "istiyorsanız tabloları boşaltın veya yeniden oluşturun."
             )
 
         row2 = st.columns([1.2, 1.2, 2.6], vertical_alignment="bottom")
         with row2[0]:
             sample = st.number_input(
-                "Profil ornegi",
+                "Profil örneği",
                 min_value=0,
                 value=0,
                 step=500,
                 key="tr_sample",
-                help="Yalnizca sema profili. 0 = tam tarama. Yazma bu degeri kullanmaz.",
+                help="Yalnızca şema profili. 0 = tam tarama. Yazma bu değeri kullanmaz.",
             )
         with row2[1]:
-            batch = st.number_input("Batch", min_value=50, value=500, step=50, key="tr_batch")
+            batch = st.number_input("Parti", min_value=50, value=500, step=50, key="tr_batch")
         with row2[2]:
             recreate = st.checkbox(
-                "Tablolari yeniden olustur (DROP + CREATE)",
+                "Tabloları yeniden oluştur (DROP + CREATE)",
                 key="tr_recreate",
                 disabled=incremental,
-                help="Incremental modda sema durur; yalnizca yeni satirlar yazilir.",
+                help="Artımlı modda şema durur; yalnızca yeni satırlar yazılır.",
             )
             clear_first = st.checkbox(
-                "Yazmadan once tablolari bosalt",
+                "Yazmadan önce tabloları boşalt",
                 key="tr_clear",
                 disabled=incremental,
             )
             allow_null = st.checkbox(
-                "Anahtar disindaki kolonlar NULL kabul etsin",
+                "Anahtar dışındaki kolonlar NULL kabul etsin",
                 value=True,
                 key="tr_null",
-                help="Ornekle profillenen alanlar baska dokumanlarda eksik olabilir.",
+                help="Örnekle profillenen alanlar başka belgelerde eksik olabilir.",
             )
 
     options.update(
@@ -191,7 +191,7 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
     plan = _build_plan(settings, options)
     st.session_state[PLAN_KEY] = plan
     tables = plan_tables(plan)
-    mode_label = "Incremental" if options["mode"] == "incremental" else "Full sync"
+    mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
 
     nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
     with st.container(border=True):
@@ -210,7 +210,7 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
         target.connect()
         created, existing = ensure_tables(target, plan, recreate=options["recreate"])
         if created:
-            st.success("Olusturulan tablolar: " + ", ".join(created))
+            st.success("Oluşturulan tablolar: " + ", ".join(created))
         if existing:
             st.caption("Zaten mevcut: " + ", ".join(existing))
         if not write:
@@ -221,7 +221,7 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
         bar = st.progress(0)
 
         def on_progress(done: int, total: int) -> None:
-            status.caption(f"{done} dokuman islendi")
+            status.caption(f"{done} belge işlendi")
             if total:
                 bar.progress(min(done / total, 1.0))
 
@@ -250,28 +250,28 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
             save_sync_watermark(options["collection"], stats.last_id, stats.last_id_type)
 
         with st.container(border=True):
-            theme.card_title("Sonuc", f"{options['collection']} → {options['schema']}")
+            theme.card_title("Sonuç", f"{options['collection']} → {options['schema']}")
             cols = st.columns(5)
             cols[0].metric("Mod", mode_label)
-            cols[1].metric("Dokuman", stats.documents)
-            cols[2].metric("Satir", stats.total_rows)
+            cols[1].metric("Belge", stats.documents)
+            cols[2].metric("Satır", stats.total_rows)
             cols[3].metric("Atlanan", stats.skipped_no_id)
-            cols[4].metric("Kirpilan", stats.truncated)
+            cols[4].metric("Kırpılan", stats.truncated)
             if stats.last_id:
-                st.caption(f"Watermark `_id` = `{stats.last_id}`")
+                st.caption(f"İşaret `_id` = `{stats.last_id}`")
             st.dataframe(
-                [{"tablo": table, "satir": count} for table, count in stats.rows.items()],
+                [{"tablo": table, "satır": count} for table, count in stats.rows.items()],
                 hide_index=True,
                 width="stretch",
             )
         if stats.documents == 0 and options["mode"] == "incremental":
-            st.info("Yeni dokuman yok; watermark zaten guncel.")
+            st.info("Yeni belge yok; işaret zaten güncel.")
         if stats.skipped_no_id:
-            st.caption(f"{stats.skipped_no_id} dokumanda `_id` yok, birincil anahtar uretilemedi.")
+            st.caption(f"{stats.skipped_no_id} belgede `_id` yok, birincil anahtar üretilemedi.")
         if stats.truncated:
             st.warning(
-                f"{stats.truncated} deger kolon genisligine kirpildi. Full sync ile "
-                "tam tarama yapip tablolari yeniden olusturmak bunu giderir."
+                f"{stats.truncated} değer kolon genişliğine kırpıldı. Tam senkron ile "
+                "tam tarama yapıp tabloları yeniden oluşturmak bunu giderir."
             )
     finally:
         target.close()
@@ -279,10 +279,10 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Aktarim",
-        "SQL aktarimi",
-        "Full sync tum collection'i yazar. Incremental, son `_id` watermark'indan "
-        "sonraki yeni dokumanlari ekler; eski kayitlardaki guncelleme icin full gerekir.",
+        "Aktarım",
+        "SQL aktarımı",
+        "Tam senkron tüm koleksiyonu yazar. Artımlı, son `_id` işaretinden "
+        "sonraki yeni belgeleri ekler; eski kayıtlardaki güncelleme için tam senkron gerekir.",
         step="transfer",
     )
 
@@ -294,9 +294,9 @@ def render(settings: Settings) -> None:
 
     blockers = []
     if not settings.mongo_ready:
-        blockers.append("Mongo baglantisi")
+        blockers.append("Mongo bağlantısı")
     if not settings.sql_ready:
-        blockers.append("SQL baglantisi")
+        blockers.append("SQL bağlantısı")
     if blockers:
         theme.need_connections(blockers)
 
@@ -304,16 +304,16 @@ def render(settings: Settings) -> None:
     ready = bool(
         settings.mongo_ready and settings.sql_ready and options["collection"] and options["table"]
     )
-    write_label = "Artimli senkron" if options["mode"] == "incremental" else "Tam senkron"
+    write_label = "Artımlı senkron" if options["mode"] == "incremental" else "Tam senkron"
 
     if options["collection"]:
         st.write("")
         actions = st.columns([1.3, 1.3, 1.3, 2.1])
         with actions[0]:
-            do_plan = st.button("Plani hazirla", width="stretch")
+            do_plan = st.button("Planı hazırla", width="stretch")
         with actions[1]:
             do_create = st.button(
-                "Tablolari olustur",
+                "Tabloları oluştur",
                 disabled=not ready or options["mode"] == "incremental",
                 width="stretch",
             )
@@ -332,5 +332,5 @@ def render(settings: Settings) -> None:
             st.error(str(exc))
 
     if PLAN_KEY in st.session_state:
-        with st.expander("Uretilen DDL", expanded=False):
+        with st.expander("Üretilen DDL", expanded=False):
             st.code(render_database_ddl([st.session_state[PLAN_KEY]]), language="sql")

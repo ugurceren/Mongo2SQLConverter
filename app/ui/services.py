@@ -133,18 +133,18 @@ def collection_list(settings: Settings) -> tuple[list[str], str | None, str | No
         return [], None, None
 
     try:
-        with st.spinner("Collection listesi aliniyor..."):
+        with st.spinner("Koleksiyon listesi alınıyor..."):
             names = fetch_collections(settings.mongo)
     except Exception as exc:
         st.session_state[COLLECTIONS_KEY] = []
-        return [], f"Mongo baglantisi basarisiz: {exc}", None
+        return [], f"Mongo bağlantısı başarısız: {exc}", None
 
     st.session_state[COLLECTIONS_KEY] = names
     warning = None
     if not names:
         warning = (
-            f"`{settings.mongo.get('database')}` icinde collection yok. "
-            "Database adi yanlis olabilir."
+            f"`{settings.mongo.get('database')}` içinde koleksiyon yok. "
+            "Veritabanı adı yanlış olabilir."
         )
     return names, None, warning
 
@@ -169,7 +169,7 @@ def peek_shape(settings: Settings, collection: str) -> dict[str, Any] | None:
     mongo = mongo_client(settings.mongo)
     try:
         mongo.connect()
-        with st.spinner(f"{collection} yapisi okunuyor..."):
+        with st.spinner(f"{collection} yapısı okunuyor..."):
             profile = Profile()
             for doc in mongo.iter_documents(collection, sample=PEEK_SAMPLE):
                 profile.add_document(doc)
@@ -204,13 +204,13 @@ def nesting_choice(
 
     with st.container(border=True):
         st.markdown(
-            '<div class="m2s-nest-title">Bu collection nasil kirilsin?</div>',
+            '<div class="m2s-nest-title">Bu koleksiyon nasıl kırılsın?</div>',
             unsafe_allow_html=True,
         )
         if shape:
             st.caption(shape_caption(shape))
         else:
-            st.caption("Secenekler bu collection'daki dizi ve nesne derinligine gore gelir.")
+            st.caption("Seçenekler bu koleksiyondaki dizi ve nesne derinliğine göre gelir.")
 
         cols = st.columns(2)
         picked: str | None = None
@@ -231,7 +231,7 @@ def nesting_choice(
                     )
                     st.caption(note)
                     if st.button(
-                        "Secildi" if selected else "Bunu kullan",
+                        "Seçildi" if selected else "Bunu kullan",
                         type="primary" if selected else "secondary",
                         width="stretch",
                         key=f"nest_pick_{key}",
@@ -266,7 +266,7 @@ def profile_many(
     try:
         mongo.connect()
         for i, name in enumerate(names, 1):
-            status.caption(f"Profileniyor: {name} ({i}/{len(names)})")
+            status.caption(f"Profilleniyor: {name} ({i}/{len(names)})")
             try:
                 profile, plan = profile_collection(
                     mongo,

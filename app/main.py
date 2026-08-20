@@ -15,7 +15,7 @@ from app.ui.services import Settings, load_state  # noqa: E402
 from core.settings import LOCAL_CONFIG_PATH  # noqa: E402
 
 st.set_page_config(
-    page_title="Mongo2SQL Converter",
+    page_title="Mongo2SQL Dönüştürücü",
     page_icon="◧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -29,17 +29,17 @@ def _sidebar_status(settings: Settings) -> None:
     if settings.mongo_ready:
         mongo = theme.status_row("MongoDB", settings.mongo.get("database") or "—", "ok")
     else:
-        mongo = theme.status_row("MongoDB", "yapilandirilmadi", "warn")
+        mongo = theme.status_row("MongoDB", "yapılandırılmadı", "warn")
     if settings.sql_ready:
         sql = theme.status_row(
             "SQL Server", f"{settings.mssql.get('database')} · {settings.schema}", "ok"
         )
     else:
-        sql = theme.status_row("SQL Server", "yalnizca aktarim icin", "off")
+        sql = theme.status_row("SQL Server", "yalnızca aktarım için", "off")
 
     theme.sidebar_panel(
         [
-            theme.sidebar_block("Baglantilar", [mongo, sql]),
+            theme.sidebar_block("Bağlantılar", [mongo, sql]),
             theme.sidebar_foot(f"Ayarlar · {LOCAL_CONFIG_PATH.name}"),
         ]
     )
@@ -59,22 +59,22 @@ def page_connections() -> None:
 
 page_schema = st.Page(
     page_discovery,
-    title="Sema kesfi",
+    title="Şema keşfi",
     icon=":material/schema:",
     url_path="discovery",
-    default=True,
 )
 page_sql = st.Page(
     page_transfer,
-    title="SQL aktarimi",
+    title="SQL aktarımı",
     icon=":material/moving:",
     url_path="transfer",
 )
 page_links = st.Page(
     page_connections,
-    title="Baglantilar",
+    title="Bağlantılar",
     icon=":material/settings_ethernet:",
     url_path="connections",
+    default=True,
 )
 theme.register_pages(
     {
@@ -93,9 +93,9 @@ with st.sidebar:
     theme.brand()
     theme.nav_menu(
         [
-            ("nav_conn", page_links, ":material/settings_ethernet:", "Baglantilar"),
-            ("nav_schema", page_schema, ":material/schema:", "Sema kesfi"),
-            ("nav_sql", page_sql, ":material/moving:", "SQL aktarimi"),
+            ("nav_conn", page_links, ":material/settings_ethernet:", "Bağlantılar"),
+            ("nav_schema", page_schema, ":material/schema:", "Şema keşfi"),
+            ("nav_sql", page_sql, ":material/moving:", "SQL aktarımı"),
         ]
     )
     _sidebar_status(SETTINGS)

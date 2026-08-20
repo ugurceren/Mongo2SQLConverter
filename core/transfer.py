@@ -500,8 +500,8 @@ def transfer_collection(
             message = str(exc)
             if "22001" in message or "truncated" in message.lower():
                 raise RuntimeError(
-                    "SQL Server bir degeri kolon genisligine sigdiramadi (22001). "
-                    "Full sync ile 'Tablolari yeniden olustur' ve ornek 0 kullanin."
+                    "SQL Server bir değeri kolon genişliğine sığdıramadı (22001). "
+                    "Tam senkron ile 'Tabloları yeniden oluştur' ve örnek 0 kullanın."
                 ) from exc
             raise
         keys.clear()

@@ -24,11 +24,11 @@ def _clear_results() -> None:
 
 def _overview(settings: Settings, collections: list[str]) -> None:
     with st.container(border=True):
-        theme.card_title("Kaynak database", "Kayitli Mongo baglantisindan okunur.")
+        theme.card_title("Kaynak veritabanı", "Kayıtlı Mongo bağlantısından okunur.")
         cols = st.columns([1.4, 1, 1, 1.1], vertical_alignment="bottom")
-        cols[0].metric("Database", settings.mongo.get("database") or "—")
-        cols[1].metric("Collection", len(collections))
-        cols[2].metric("Sema hedefi", settings.schema)
+        cols[0].metric("Veritabanı", settings.mongo.get("database") or "—")
+        cols[1].metric("Koleksiyon", len(collections))
+        cols[2].metric("Şema hedefi", settings.schema)
         with cols[3]:
             st.button(
                 "Listeyi yenile",
@@ -36,53 +36,53 @@ def _overview(settings: Settings, collections: list[str]) -> None:
                 on_click=invalidate_collections,
                 width="stretch",
             )
-        st.caption(settings.mongo.get("uri") or "Baglanti kayitli degil.")
+        st.caption(settings.mongo.get("uri") or "Bağlantı kayıtlı değil.")
 
 
 def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
     with st.container(border=True):
         theme.card_title(
-            "Collection sec",
-            "Once kaynagi secin. Kirilim secenekleri bu collection'a gore sonra sorulur.",
+            "Koleksiyon seç",
+            "Önce kaynağı seçin. Kırılım seçenekleri bu koleksiyona göre sonra sorulur.",
         )
         row = st.columns([2.6, 1.1], vertical_alignment="bottom")
         with row[0]:
             if collections:
                 collection = st.selectbox(
-                    "Collection",
+                    "Koleksiyon",
                     options=collections,
                     index=None,
-                    placeholder="Collection secin...",
+                    placeholder="Koleksiyon seçin...",
                     key="disc_collection",
                 )
             else:
                 collection = None
-                st.selectbox("Collection", options=["Collection yok"], disabled=True)
+                st.selectbox("Koleksiyon", options=["Koleksiyon yok"], disabled=True)
         with row[1]:
             sample = st.number_input(
-                "Ornek",
+                "Örnek",
                 min_value=0,
                 value=0,
                 step=500,
                 key="disc_sample",
-                help="0 = tam tarama. Ornekleme hizlidir ama uzunluklar alt sinir olur.",
+                help="0 = tam tarama. Örnekleme hızlıdır ama uzunluklar alt sınır olur.",
             )
         if not collection:
-            st.caption("Collection secildikten sonra ic ice yapi sorulur.")
+            st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
     return collection, int(sample)
 
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Kesif",
-        "Sema kesfi",
-        "Collection'lari olcerek DRDL ve MSSQL sema onerisi uretir. Dokuman okur, "
-        "hicbir yere yazmaz; SQL baglantisi gerekmez.",
+        "Keşif",
+        "Şema keşfi",
+        "Koleksiyonları ölçerek DRDL ve MSSQL şema önerisi üretir. Belge okur, "
+        "hiçbir yere yazmaz; SQL bağlantısı gerekmez.",
         step="discovery",
     )
 
     if not settings.mongo_ready:
-        theme.need_connections(["Mongo baglantisi"])
+        theme.need_connections(["Mongo bağlantısı"])
 
     collections, error, warning = collection_list(settings)
     _overview(settings, collections)
@@ -104,16 +104,16 @@ def render(settings: Settings) -> None:
         st.write("")
         actions = st.columns([1.5, 1.5, 2])
         with actions[0]:
-            run_collection = st.button("Semayi cikar", width="stretch")
+            run_collection = st.button("Şemayı çıkar", width="stretch")
         with actions[1]:
             run_database = st.button(
-                "Database DRDL",
+                "Veritabanı DRDL",
                 type="primary",
                 icon=":material/database:",
                 disabled=not collections,
                 width="stretch",
                 key="disc_database_drdl",
-                help="Secilen kirilim ve ornek boyutuyla tum collection'lari tarar.",
+                help="Seçilen kırılım ve örnek boyutuyla tüm koleksiyonları tarar.",
             )
 
     if (run_collection or run_database) and nesting:
@@ -134,12 +134,12 @@ def render(settings: Settings) -> None:
             else:
                 st.session_state["ddl"] = render_database_ddl(plans)
                 st.session_state["plan"] = plans[0]
-            st.success(f"{len(plans)} collection · {total_docs} dokuman profillendi")
+            st.success(f"{len(plans)} koleksiyon · {total_docs} belge profillendi")
         else:
             _clear_results()
-            st.warning("Profillenecek dokuman bulunamadi.")
+            st.warning("Profillenecek belge bulunamadı.")
         if skipped:
-            st.caption("Bos oldugu icin atlandi: " + ", ".join(skipped))
+            st.caption("Boş olduğu için atlandı: " + ", ".join(skipped))
         for item in errors:
             st.error(item)
 
@@ -151,13 +151,13 @@ def render(settings: Settings) -> None:
     with st.container(border=True):
         scope = st.session_state.get("result_scope")
         theme.card_title(
-            "Cikti",
+            "Çıktı",
             f"<code>{name}</code> · "
-            f"{'tum database (DRDL)' if scope == 'database' else 'tek collection'}",
+            f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
         )
         theme.page_cta(
             "transfer",
-            "SQL aktarimina gec",
+            "SQL aktarımına geç",
             ":material/moving:",
             "cta_to_transfer",
         )

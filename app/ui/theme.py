@@ -378,9 +378,9 @@ code, pre, .stCode { font-size: 0.82rem; }
 PAGES: dict[str, object] = {}
 
 STEPS = (
-    ("connections", "1", "Baglantilar"),
-    ("discovery", "2", "Sema kesfi"),
-    ("transfer", "3", "SQL aktarimi"),
+    ("connections", "1", "Bağlantılar"),
+    ("discovery", "2", "Şema keşfi"),
+    ("transfer", "3", "SQL aktarımı"),
 )
 
 
@@ -418,10 +418,10 @@ def page_cta(page_key: str, label: str, icon: str, widget_key: str) -> None:
 
 
 def need_connections(blockers: Sequence[str]) -> None:
-    st.warning(" ve ".join(blockers) + " eksik. Once baglantilari kaydedin.")
+    st.warning(" ve ".join(blockers) + " eksik. Önce bağlantıları kaydedin.")
     page_cta(
         "connections",
-        "Baglantilara git",
+        "Bağlantılara git",
         ":material/settings_ethernet:",
         "cta_to_connections",
     )
@@ -434,7 +434,7 @@ def brand() -> None:
             <div class="m2s-logo">M2S</div>
             <div class="m2s-brand-text">
                 <div class="m2s-brand-name">Mongo2SQL</div>
-                <div class="m2s-brand-sub">Schema &amp; Transfer Suite</div>
+                <div class="m2s-brand-sub">Şema ve aktarım</div>
             </div>
         </div>
         """,

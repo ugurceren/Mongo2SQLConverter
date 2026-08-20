@@ -391,23 +391,23 @@ NESTING_DOCUMENT = "document"
 NESTING_OPTIONS = (
     (
         NESTING_DEEP,
-        "Derin iliskisel",
-        "Diziler child tablo, nesneler kolon. En ince kirilim; en cok tablo.",
+        "Derin ilişkisel",
+        "Diziler alt tablo, nesneler kolon. En ince kırılım; en çok tablo.",
     ),
     (
         NESTING_HYBRID,
         "Hibrit",
-        "Kok diziler child tablo; daha derin ic ice yapilar JSON kolon.",
+        "Kök diziler alt tablo; daha derin iç içe yapılar JSON kolon.",
     ),
     (
         NESTING_COLUMNS,
         "Tek tablo + JSON",
-        "Bir dokuman = bir satir. Ust seviye skalerler kolon, nesne ve diziler JSON.",
+        "Bir belge = bir satır. Üst seviye skalerler kolon, nesne ve diziler JSON.",
     ),
     (
         NESTING_DOCUMENT,
-        "Birebir dokuman",
-        "Tek tablo: mongo_id + document JSON. Sema yok, birebir kopya.",
+        "Birebir belge",
+        "Tek tablo: mongo_id + document JSON. Şema yok, birebir kopya.",
     ),
 )
 
@@ -467,17 +467,17 @@ def shape_caption(shape: dict[str, Any]) -> str:
     if shape.get("top_arrays"):
         names = ", ".join(f"`{name}`" for name in shape["top_arrays"][:6])
         extra = f" +{len(shape['top_arrays']) - 6}" if len(shape["top_arrays"]) > 6 else ""
-        parts.append(f"kok dizi: {names}{extra}")
+        parts.append(f"kök dizi: {names}{extra}")
     if shape.get("nested_arrays"):
-        parts.append(f"{len(shape['nested_arrays'])} ic ice dizi")
+        parts.append(f"{len(shape['nested_arrays'])} iç içe dizi")
     if shape.get("top_objects"):
         names = ", ".join(f"`{name}`" for name in shape["top_objects"][:4])
-        parts.append(f"kok nesne: {names}")
+        parts.append(f"kök nesne: {names}")
     if shape.get("nested_objects"):
-        parts.append(f"{len(shape['nested_objects'])} ic ice nesne")
+        parts.append(f"{len(shape['nested_objects'])} iç içe nesne")
     if not parts:
-        return "Bu collection duz gorunuyor: skaler alanlar + istege bagli JSON kopya."
-    return "Bu collection'da " + "; ".join(parts) + "."
+        return "Bu koleksiyon düz görünüyor: skaler alanlar + isteğe bağlı JSON kopya."
+    return "Bu koleksiyonda " + "; ".join(parts) + "."
 
 
 def _child_table_name(root: str, array_path: str) -> str:
@@ -492,9 +492,9 @@ def preview_tables(
     if nesting == NESTING_DOCUMENT:
         return [root], "Tek tablo: mongo_id + document JSON."
     if nesting == NESTING_COLUMNS:
-        return [root], "Ust seviye skalerler kolon; nesne ve diziler JSON."
+        return [root], "Üst seviye skalerler kolon; nesne ve diziler JSON."
     if not shape:
-        return [root], "Yapi henuz okunamadi; child tablolar profilde netlesir."
+        return [root], "Yapı henüz okunamadı; alt tablolar profilde netleşir."
     if nesting == NESTING_HYBRID:
         tables = [root] + [
             _child_table_name(root, path) for path in shape.get("top_arrays") or []
@@ -504,14 +504,14 @@ def preview_tables(
             tables.append(f"{path} -> JSON")
         leftover = len(nested) - 6
         if leftover > 0:
-            tables.append(f"+{leftover} ic ice dizi -> JSON")
-        note = "Kok diziler child tablo."
+            tables.append(f"+{leftover} iç içe dizi -> JSON")
+        note = "Kök diziler alt tablo."
         if nested or shape.get("nested_objects"):
-            note += " Daha derin yapilar JSON kolon."
+            note += " Daha derin yapılar JSON kolon."
         return tables, note
     arrays = list(shape.get("top_arrays") or []) + list(shape.get("nested_arrays") or [])
     tables = [root] + [_child_table_name(root, path) for path in arrays]
-    return tables, "Diziler child tablo, nesneler kolon."
+    return tables, "Diziler alt tablo, nesneler kolon."
 
 
 def sql_ident(raw: str) -> str:
