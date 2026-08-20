@@ -1,12 +1,18 @@
+# Optional. The UI writes config.local.yaml when you click Kaydet.
+# Copy this file only if you prefer to edit YAML by hand.
+# Leave secrets empty in git; never commit config.local.yaml.
+
 mongodb:
-  uri: "mongodb://host:27017/?authSource=admin"
-  database: "mydb"
-  username: "user"
-  password: "secret"
+  uri: ""
+  database: ""
+  username: ""
+  password: ""
 
 mssql:
-  server: "srv\\INSTANCE"
-  database: "MyWarehouse"
-  schema: "dbo"
+  server: ""
+  database: ""
+  schema: ""
   trusted_connection: true
-  driver: "ODBC Driver 17 for SQL Server"
+  driver: ""
+  username: ""
+  password: ""

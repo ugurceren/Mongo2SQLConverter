@@ -1,13 +1,8 @@
-mongodb:
-  uri: "mongodb://localhost:27017"
-  database: "mydb"
+# Connection strings are not stored here.
+# Fill them on the Baglantilar page (writes gitignored config.local.yaml).
 
-mssql:
-  server: "localhost"
-  database: "master"
-  schema: "dbo"
-  trusted_connection: true
-  driver: "ODBC Driver 17 for SQL Server"
+mongodb: {}
+mssql: {}
 
 profiler:
   headroom: 1.5

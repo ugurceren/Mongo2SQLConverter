@@ -40,14 +40,6 @@ def _sidebar_status(settings: Settings) -> None:
     theme.sidebar_panel(
         [
             theme.sidebar_block("Baglantilar", [mongo, sql]),
-            theme.sidebar_block(
-                "Profil",
-                [
-                    theme.status_row("Headroom", f"×{settings.headroom:g}"),
-                    theme.status_row("Map esigi", f"{settings.map_min_keys} anahtar"),
-                ],
-                show_in_rail=False,
-            ),
             theme.sidebar_foot(f"Ayarlar · {LOCAL_CONFIG_PATH.name}"),
         ]
     )
@@ -93,7 +85,7 @@ theme.register_pages(
 )
 
 navigation = st.navigation(
-    [page_schema, page_sql, page_links],
+    [page_links, page_schema, page_sql],
     position="hidden",
 )
 
@@ -101,9 +93,9 @@ with st.sidebar:
     theme.brand()
     theme.nav_menu(
         [
+            ("nav_conn", page_links, ":material/settings_ethernet:", "Baglantilar"),
             ("nav_schema", page_schema, ":material/schema:", "Sema kesfi"),
             ("nav_sql", page_sql, ":material/moving:", "SQL aktarimi"),
-            ("nav_conn", page_links, ":material/settings_ethernet:", "Baglantilar"),
         ]
     )
     _sidebar_status(SETTINGS)

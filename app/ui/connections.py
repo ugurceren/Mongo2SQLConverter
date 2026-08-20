@@ -18,6 +18,15 @@ from core.settings import LOCAL_CONFIG_PATH, save_connection_overrides
 
 SAVE_FLASH = "conn_saved"
 
+# Suggestions only — never written to config.yaml.
+HINT_MONGO_URI = "mongodb://localhost:27017"
+HINT_MONGO_DB = "mydb"
+HINT_MONGO_USER = "kullanici"
+HINT_SQL_SERVER = "localhost"
+HINT_SQL_DB = "MyWarehouse"
+HINT_SQL_SCHEMA = "dbo"
+HINT_SQL_USER = "sa"
+
 
 def _mark_saved(label: str) -> None:
     st.session_state[SAVE_FLASH] = label
@@ -72,22 +81,35 @@ def _mongo_card(settings: Settings) -> None:
         theme.section_heading(
             "Kaynak",
             "MongoDB",
-            "Sema kesfi ve aktarim icin okunan veritabani. Zorunlu.",
+            "Sema kesfi ve aktarim icin okunan veritabani. Zorunlu. "
+            "Gri yazi ornektir; Kaydet'e basinca config.local.yaml yazar.",
         )
         with st.form("mongo_conn"):
             left, right = st.columns(2)
             with left:
-                uri = st.text_input("Baglanti URI", value=settings.mongo.get("uri") or "")
-                database = st.text_input("Database", value=settings.mongo.get("database") or "")
+                uri = st.text_input(
+                    "Baglanti URI",
+                    value=settings.mongo.get("uri") or "",
+                    placeholder=HINT_MONGO_URI,
+                )
+                database = st.text_input(
+                    "Database",
+                    value=settings.mongo.get("database") or "",
+                    placeholder=HINT_MONGO_DB,
+                )
             with right:
-                user = st.text_input("Kullanici", value=settings.mongo.get("username") or "")
+                user = st.text_input(
+                    "Kullanici",
+                    value=settings.mongo.get("username") or "",
+                    placeholder=HINT_MONGO_USER,
+                )
                 password = st.text_input(
                     "Sifre",
                     type="password",
                     placeholder="kayitli — degistirmek icin yazin"
                     if settings.mongo_password
-                    else "bos",
-                    help="Bos birakilirsa kayitli sifre korunur.",
+                    else "bos birakin veya yazin",
+                    help="Bos birakilirsa kayitli sifre korunur. Oneri gosterilmez.",
                 )
             actions = st.columns([1, 1, 2])
             with actions[0]:
@@ -123,7 +145,8 @@ def _sql_card(settings: Settings) -> None:
         theme.section_heading(
             "Hedef",
             "SQL Server",
-            "Yalnizca veri aktarirken gerekir. Sema kesfi bu baglantiyi kullanmaz.",
+            "Yalnizca veri aktarirken gerekir. Sema kesfi bu baglantiyi kullanmaz. "
+            "Gri yazi ornektir; gercek degerleri siz yazin.",
         )
         trusted_default = bool(settings.mssql.get("trusted_connection", True))
         if "sql_auth" not in st.session_state:
@@ -132,9 +155,21 @@ def _sql_card(settings: Settings) -> None:
         left, right = st.columns(2)
         with left:
             st.markdown("**Yazilacak yer**")
-            server = st.text_input("Sunucu", value=settings.mssql.get("server") or "")
-            database = st.text_input("Database", value=settings.mssql.get("database") or "")
-            schema = st.text_input("Sema", value=settings.mssql.get("schema") or "dbo")
+            server = st.text_input(
+                "Sunucu",
+                value=settings.mssql.get("server") or "",
+                placeholder=HINT_SQL_SERVER,
+            )
+            database = st.text_input(
+                "Database",
+                value=settings.mssql.get("database") or "",
+                placeholder=HINT_SQL_DB,
+            )
+            schema = st.text_input(
+                "Sema",
+                value=settings.mssql.get("schema") or "",
+                placeholder=HINT_SQL_SCHEMA,
+            )
         with right:
             st.markdown("**Kimlik dogrulama**")
             drivers = available_drivers()
@@ -154,6 +189,7 @@ def _sql_card(settings: Settings) -> None:
             user = st.text_input(
                 "Kullanici",
                 value=settings.mssql.get("username") or "",
+                placeholder=HINT_SQL_USER,
                 disabled=windows,
             )
             password = st.text_input(
