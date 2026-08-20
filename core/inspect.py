@@ -480,6 +480,40 @@ def shape_caption(shape: dict[str, Any]) -> str:
     return "Bu collection'da " + "; ".join(parts) + "."
 
 
+def _child_table_name(root: str, array_path: str) -> str:
+    return f"{root}_{sql_ident(array_path.replace('[]', '').replace('.', '_'))}"
+
+
+def preview_tables(
+    nesting: str, root_table: str, shape: dict[str, Any] | None
+) -> tuple[list[str], str]:
+    """Approximate SQL tables from a shape peek — not a full plan."""
+    root = sql_ident(root_table) if root_table else "tablo"
+    if nesting == NESTING_DOCUMENT:
+        return [root], "Tek tablo: mongo_id + document JSON."
+    if nesting == NESTING_COLUMNS:
+        return [root], "Ust seviye skalerler kolon; nesne ve diziler JSON."
+    if not shape:
+        return [root], "Yapi henuz okunamadi; child tablolar profilde netlesir."
+    if nesting == NESTING_HYBRID:
+        tables = [root] + [
+            _child_table_name(root, path) for path in shape.get("top_arrays") or []
+        ]
+        nested = list(shape.get("nested_arrays") or [])
+        for path in nested[:6]:
+            tables.append(f"{path} -> JSON")
+        leftover = len(nested) - 6
+        if leftover > 0:
+            tables.append(f"+{leftover} ic ice dizi -> JSON")
+        note = "Kok diziler child tablo."
+        if nested or shape.get("nested_objects"):
+            note += " Daha derin yapilar JSON kolon."
+        return tables, note
+    arrays = list(shape.get("top_arrays") or []) + list(shape.get("nested_arrays") or [])
+    tables = [root] + [_child_table_name(root, path) for path in arrays]
+    return tables, "Diziler child tablo, nesneler kolon."
+
+
 def sql_ident(raw: str) -> str:
     # Leading underscores are kept on purpose: stripping them turns Mongo's
     # "__v" into "v", which no longer points back at the source field.

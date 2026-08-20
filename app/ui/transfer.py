@@ -9,7 +9,7 @@ from app.ui.services import (
     Settings,
     collection_list,
     mongo_client,
-    nesting_choice,
+    nesting_card,
     profile_one,
     sql_target,
 )
@@ -27,17 +27,38 @@ from core.transfer import (
 PLAN_KEY = "transfer_plan"
 
 
+def _defaults(settings: Settings) -> dict:
+    return {
+        "collection": None,
+        "schema": settings.schema,
+        "table": "",
+        "sample": 0,
+        "batch": 500,
+        "recreate": False,
+        "clear_first": False,
+        "allow_null": True,
+        "mode": "full",
+        "watermark": None,
+        "nesting": "hybrid",
+    }
+
+
 def _target_card(settings: Settings, collections: list[str]) -> dict:
+    options = _defaults(settings)
     with st.container(border=True):
         theme.card_title(
             "Hedef",
-            "Kirilim secenekleri secilen collection'un nested yapisina gore sunulur.",
+            "Once collection ve kok tabloyu secin. Kirilim sonra sorulur.",
         )
         row = st.columns([2.2, 1.6, 1.6], vertical_alignment="bottom")
         with row[0]:
             if collections:
                 collection = st.selectbox(
-                    "Kaynak collection", options=collections, key="tr_collection"
+                    "Kaynak collection",
+                    options=collections,
+                    index=None,
+                    placeholder="Collection secin...",
+                    key="tr_collection",
                 )
             else:
                 collection = None
@@ -49,11 +70,26 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 "Kok tablo",
                 value=sql_ident(collection) if collection else "",
                 key=f"tr_table_{collection or 'none'}",
+                disabled=not collection,
                 help="Child tablolar bu addan turer: <ad>_<alan>.",
             )
+        if not collection:
+            st.caption("Collection secildikten sonra ic ice yapi sorulur.")
 
-        nesting = nesting_choice(settings, collection)
+    options["collection"] = collection
+    options["schema"] = (schema or "").strip() or settings.schema
+    options["table"] = (table or "").strip()
+    if not collection:
+        return options
 
+    st.write("")
+    options["nesting"] = nesting_card(
+        settings, collection, options["table"] or sql_ident(collection)
+    )
+
+    st.write("")
+    with st.container(border=True):
+        theme.card_title("Senkron", "Yazma sekli ve profil ayarlari.")
         mode = st.radio(
             "Senkron",
             ("Full sync", "Incremental"),
@@ -62,7 +98,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             help="Full: tum dokumanlar. Incremental: son kaydedilen `_id` sonrasi yeni kayitlar.",
         )
         incremental = mode == "Incremental"
-        watermark = load_sync_watermark(collection) if collection else None
+        watermark = load_sync_watermark(collection)
 
         if incremental:
             if watermark:
@@ -112,19 +148,18 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 help="Ornekle profillenen alanlar baska dokumanlarda eksik olabilir.",
             )
 
-    return {
-        "collection": collection,
-        "schema": schema.strip() or settings.schema,
-        "table": table.strip(),
-        "sample": int(sample),
-        "batch": int(batch),
-        "recreate": False if incremental else recreate,
-        "clear_first": False if incremental else clear_first,
-        "allow_null": allow_null,
-        "mode": "incremental" if incremental else "full",
-        "watermark": watermark,
-        "nesting": nesting,
-    }
+    options.update(
+        {
+            "sample": int(sample),
+            "batch": int(batch),
+            "recreate": False if incremental else recreate,
+            "clear_first": False if incremental else clear_first,
+            "allow_null": allow_null,
+            "mode": "incremental" if incremental else "full",
+            "watermark": watermark,
+        }
+    )
+    return options
 
 
 def _build_plan(settings: Settings, options: dict) -> dict:
@@ -244,10 +279,11 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Adim 2",
+        "Aktarim",
         "SQL aktarimi",
         "Full sync tum collection'i yazar. Incremental, son `_id` watermark'indan "
         "sonraki yeni dokumanlari ekler; eski kayitlardaki guncelleme icin full gerekir.",
+        step="transfer",
     )
 
     collections, error, warning = collection_list(settings)
@@ -262,9 +298,7 @@ def render(settings: Settings) -> None:
     if not settings.sql_ready:
         blockers.append("SQL baglantisi")
     if blockers:
-        st.warning(
-            " ve ".join(blockers) + " eksik. **Baglantilar** sayfasindan kaydedin."
-        )
+        theme.need_connections(blockers)
 
     options = _target_card(settings, collections)
     ready = bool(
@@ -272,22 +306,23 @@ def render(settings: Settings) -> None:
     )
     write_label = "Artimli senkron" if options["mode"] == "incremental" else "Tam senkron"
 
-    st.write("")
-    actions = st.columns([1.3, 1.3, 1.3, 2.1])
-    with actions[0]:
-        do_plan = st.button(
-            "Plani hazirla", disabled=not options["collection"], width="stretch"
-        )
-    with actions[1]:
-        do_create = st.button(
-            "Tablolari olustur",
-            disabled=not ready or options["mode"] == "incremental",
-            width="stretch",
-        )
-    with actions[2]:
-        do_write = st.button(
-            write_label, type="primary", disabled=not ready, width="stretch"
-        )
+    if options["collection"]:
+        st.write("")
+        actions = st.columns([1.3, 1.3, 1.3, 2.1])
+        with actions[0]:
+            do_plan = st.button("Plani hazirla", width="stretch")
+        with actions[1]:
+            do_create = st.button(
+                "Tablolari olustur",
+                disabled=not ready or options["mode"] == "incremental",
+                width="stretch",
+            )
+        with actions[2]:
+            do_write = st.button(
+                write_label, type="primary", disabled=not ready, width="stretch"
+            )
+    else:
+        do_plan = do_create = do_write = False
 
     if do_plan or do_create or do_write:
         st.write("")

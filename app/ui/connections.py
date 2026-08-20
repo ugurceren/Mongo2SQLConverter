@@ -213,9 +213,18 @@ def render(settings: Settings) -> None:
         "Baglantilar",
         "Kaynak ve hedef ayri tutulur: Mongo olmadan hicbir sey calismaz, SQL yalnizca "
         "veri yazarken devreye girer. Kaydet, degerleri asagidaki dosyaya yazar.",
+        step="connections",
     )
     st.caption(f"Kayit dosyasi · `{LOCAL_CONFIG_PATH}`  ·  git'e eklenmez")
     _show_saved()
     _mongo_card(settings)
     st.write("")
     _sql_card(settings)
+    if settings.mongo_ready:
+        st.write("")
+        theme.page_cta(
+            "discovery",
+            "Sema kesfine gec",
+            ":material/schema:",
+            "cta_to_discovery",
+        )

@@ -9,10 +9,10 @@ from app.ui.services import (
     Settings,
     collection_list,
     invalidate_collections,
-    nesting_choice,
+    nesting_card,
     profile_many,
 )
-from core.inspect import render_database_ddl, render_database_drdl
+from core.inspect import render_database_ddl, render_database_drdl, sql_ident
 
 RESULT_KEYS = ("drdl", "ddl", "plan", "result_name", "result_scope")
 
@@ -39,37 +39,20 @@ def _overview(settings: Settings, collections: list[str]) -> None:
         st.caption(settings.mongo.get("uri") or "Baglanti kayitli degil.")
 
 
-def render(settings: Settings) -> None:
-    theme.page_header(
-        "Adim 1",
-        "Sema kesfi",
-        "Collection'lari olcerek DRDL ve MSSQL sema onerisi uretir. Dokuman okur, "
-        "hicbir yere yazmaz; SQL baglantisi gerekmez.",
-    )
-
-    if not settings.mongo_ready:
-        st.warning("Mongo baglantisi kayitli degil. **Baglantilar** sayfasindan kaydedin.")
-
-    collections, error, warning = collection_list(settings)
-    _overview(settings, collections)
-
-    if error:
-        st.error(error)
-    elif warning:
-        st.warning(warning)
-
-    st.write("")
+def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
     with st.container(border=True):
         theme.card_title(
-            "Cikti uret",
-            "Once collection secilir; kirilim secenekleri o collection'un nested yapisina gore gelir.",
+            "Collection sec",
+            "Once kaynagi secin. Kirilim secenekleri bu collection'a gore sonra sorulur.",
         )
-        row = st.columns([2.6, 1.1, 1.5], vertical_alignment="bottom")
+        row = st.columns([2.6, 1.1], vertical_alignment="bottom")
         with row[0]:
             if collections:
                 collection = st.selectbox(
                     "Collection",
                     options=collections,
+                    index=None,
+                    placeholder="Collection secin...",
                     key="disc_collection",
                 )
             else:
@@ -84,27 +67,61 @@ def render(settings: Settings) -> None:
                 key="disc_sample",
                 help="0 = tam tarama. Ornekleme hizlidir ama uzunluklar alt sinir olur.",
             )
-        with row[2]:
-            run_collection = st.button(
-                "Semayi cikar", disabled=not collection, width="stretch"
-            )
-        nesting = nesting_choice(settings, collection)
-        run_database = st.button(
-            "Database DRDL",
-            type="primary",
-            icon=":material/database:",
-            disabled=not collections,
-            width="stretch",
-            key="disc_database_drdl",
-            help="Secilen ornek boyutuyla tum collection'lari tarar ve tek bir DRDL uretir.",
-        )
+        if not collection:
+            st.caption("Collection secildikten sonra ic ice yapi sorulur.")
+    return collection, int(sample)
 
-    if run_collection or run_database:
+
+def render(settings: Settings) -> None:
+    theme.page_header(
+        "Kesif",
+        "Sema kesfi",
+        "Collection'lari olcerek DRDL ve MSSQL sema onerisi uretir. Dokuman okur, "
+        "hicbir yere yazmaz; SQL baglantisi gerekmez.",
+        step="discovery",
+    )
+
+    if not settings.mongo_ready:
+        theme.need_connections(["Mongo baglantisi"])
+
+    collections, error, warning = collection_list(settings)
+    _overview(settings, collections)
+
+    if error:
+        st.error(error)
+    elif warning:
+        st.warning(warning)
+
+    st.write("")
+    collection, sample = _pick_collection(collections)
+
+    nesting = None
+    run_collection = False
+    run_database = False
+    if collection:
+        st.write("")
+        nesting = nesting_card(settings, collection, sql_ident(collection))
+        st.write("")
+        actions = st.columns([1.5, 1.5, 2])
+        with actions[0]:
+            run_collection = st.button("Semayi cikar", width="stretch")
+        with actions[1]:
+            run_database = st.button(
+                "Database DRDL",
+                type="primary",
+                icon=":material/database:",
+                disabled=not collections,
+                width="stretch",
+                key="disc_database_drdl",
+                help="Secilen kirilim ve ornek boyutuyla tum collection'lari tarar.",
+            )
+
+    if (run_collection or run_database) and nesting:
         whole_db = bool(run_database)
         targets = collections if whole_db else [collection]
         st.write("")
         plans, skipped, errors, total_docs = profile_many(
-            settings, targets, int(sample), settings.schema, nesting=nesting
+            settings, targets, sample, settings.schema, nesting=nesting
         )
         if plans:
             database = settings.mongo.get("database") or "database"
@@ -137,6 +154,12 @@ def render(settings: Settings) -> None:
             "Cikti",
             f"<code>{name}</code> · "
             f"{'tum database (DRDL)' if scope == 'database' else 'tek collection'}",
+        )
+        theme.page_cta(
+            "transfer",
+            "SQL aktarimina gec",
+            ":material/moving:",
+            "cta_to_transfer",
         )
         if scope == "collection" and "ddl" in st.session_state and "plan" in st.session_state:
             drdl_tab, ddl_tab, plan_tab = st.tabs(["DRDL", "MSSQL DDL", "Plan"])

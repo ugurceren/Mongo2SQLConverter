@@ -84,6 +84,13 @@ page_links = st.Page(
     icon=":material/settings_ethernet:",
     url_path="connections",
 )
+theme.register_pages(
+    {
+        "discovery": page_schema,
+        "transfer": page_sql,
+        "connections": page_links,
+    }
+)
 
 navigation = st.navigation(
     [page_schema, page_sql, page_links],

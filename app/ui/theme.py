@@ -58,8 +58,89 @@ CSS = """
 .m2s-lede {
     color: var(--m2s-muted);
     font-size: 0.93rem;
-    margin: 0.4rem 0 1.6rem 0;
+    margin: 0.4rem 0 1.1rem 0;
     max-width: 68ch;
+}
+
+/* ---------- stepper ---------- */
+.m2s-stepper {
+    display: flex; align-items: center; gap: 0.4rem;
+    margin: 0 0 1.45rem 0;
+}
+.m2s-step {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.32rem 0.72rem;
+    border-radius: 999px;
+    border: 1px solid var(--m2s-border);
+    color: var(--m2s-muted);
+    font-size: 0.78rem;
+    font-weight: 650;
+    white-space: nowrap;
+}
+.m2s-step-n {
+    width: 1.15rem; height: 1.15rem; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.68rem; font-weight: 750;
+    background: rgba(240, 246, 252, 0.08);
+}
+.m2s-step.active {
+    color: #d7e8ff;
+    border-color: rgba(76, 141, 255, 0.55);
+    background: var(--m2s-accent-soft);
+}
+.m2s-step.active .m2s-step-n { background: var(--m2s-accent); color: #041018; }
+.m2s-step.done { color: #9ee3a8; border-color: rgba(63, 185, 80, 0.35); }
+.m2s-step.done .m2s-step-n { background: rgba(63, 185, 80, 0.28); color: #b6f0be; }
+.m2s-step-line {
+    flex: 1; height: 1px; background: var(--m2s-border); min-width: 0.8rem;
+}
+
+.st-key-cta_conn, .st-key-cta_disc, .st-key-cta_sql,
+.st-key-cta_to_connections, .st-key-cta_to_discovery, .st-key-cta_to_transfer {
+    max-width: 280px;
+}
+.st-key-cta_conn [data-testid="stPageLink"] a,
+.st-key-cta_disc [data-testid="stPageLink"] a,
+.st-key-cta_sql [data-testid="stPageLink"] a,
+.st-key-cta_to_connections [data-testid="stPageLink"] a,
+.st-key-cta_to_discovery [data-testid="stPageLink"] a,
+.st-key-cta_to_transfer [data-testid="stPageLink"] a {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 8px !important;
+    padding: 0.55rem 0.95rem !important;
+    font-weight: 650 !important;
+    text-decoration: none !important;
+    border: 1px solid rgba(76, 141, 255, 0.45) !important;
+    background: var(--m2s-accent-soft) !important;
+    color: #dbe8ff !important;
+}
+.st-key-cta_sql [data-testid="stPageLink"] a,
+.st-key-cta_to_transfer [data-testid="stPageLink"] a {
+    border-color: rgba(251, 146, 60, 0.5) !important;
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.28), rgba(245, 158, 11, 0.12)) !important;
+    color: #ffd08a !important;
+}
+
+/* ---------- nesting option cards ---------- */
+.m2s-nest-title {
+    font-size: 1.08rem;
+    font-weight: 720;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.4rem 0;
+}
+.m2s-table-preview {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: #c8d1dc;
+    margin: 0.35rem 0 0.15rem 0;
+    white-space: pre-wrap;
+}
+[class*="st-key-nest_on_"] [data-testid="stVerticalBlockBorderWrapper"] {
+    border-color: rgba(76, 141, 255, 0.65) !important;
+    box-shadow: 0 0 0 1px rgba(76, 141, 255, 0.22);
 }
 
 /* ---------- cards ---------- */
@@ -294,9 +375,56 @@ code, pre, .stCode { font-size: 0.82rem; }
 </style>
 """
 
+PAGES: dict[str, object] = {}
+
+STEPS = (
+    ("connections", "1", "Baglantilar"),
+    ("discovery", "2", "Sema kesfi"),
+    ("transfer", "3", "SQL aktarimi"),
+)
+
 
 def inject_css() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
+
+
+def register_pages(pages: dict[str, object]) -> None:
+    """Page objects from `st.navigation`, used by in-page CTAs."""
+    PAGES.update(pages)
+
+
+def stepper(active: str) -> None:
+    """Baglantilar → Sema kesfi → SQL aktarimi, with the active step highlighted."""
+    order = [key for key, _, _ in STEPS]
+    active_at = order.index(active) if active in order else 0
+    chips: list[str] = []
+    for i, (key, num, label) in enumerate(STEPS):
+        if i:
+            chips.append('<span class="m2s-step-line"></span>')
+        kind = "active" if key == active else ("done" if i < active_at else "")
+        chips.append(
+            f'<div class="m2s-step {kind}">'
+            f'<span class="m2s-step-n">{num}</span>{label}</div>'
+        )
+    st.markdown(f'<div class="m2s-stepper">{"".join(chips)}</div>', unsafe_allow_html=True)
+
+
+def page_cta(page_key: str, label: str, icon: str, widget_key: str) -> None:
+    page = PAGES.get(page_key)
+    if page is None:
+        return
+    with st.container(key=widget_key):
+        st.page_link(page, label=label, icon=icon, width="stretch")
+
+
+def need_connections(blockers: Sequence[str]) -> None:
+    st.warning(" ve ".join(blockers) + " eksik. Once baglantilari kaydedin.")
+    page_cta(
+        "connections",
+        "Baglantilara git",
+        ":material/settings_ethernet:",
+        "cta_to_connections",
+    )
 
 
 def brand() -> None:
@@ -348,9 +476,12 @@ def sidebar_panel(blocks: Sequence[str]) -> None:
     st.markdown("".join(blocks), unsafe_allow_html=True)
 
 
-def page_header(eyebrow: str, title: str, lede: str) -> None:
+def page_header(eyebrow: str, title: str, lede: str, *, step: str | None = None) -> None:
+    if step:
+        stepper(step)
+    elif eyebrow:
+        st.markdown(f'<div class="m2s-eyebrow">{eyebrow}</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div class="m2s-eyebrow">{eyebrow}</div>'
         f'<h1 class="m2s-title">{title}</h1>'
         f'<p class="m2s-lede">{lede}</p>',
         unsafe_allow_html=True,

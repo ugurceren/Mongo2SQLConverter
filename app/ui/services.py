@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,8 +13,10 @@ from core.inspect import (
     Profile,
     describe_shape,
     nesting_keys_for,
+    preview_tables,
     profile_collection,
     shape_caption,
+    sql_ident,
 )
 from core.mongo import MongoClientWrapper
 from core.mssql import MssqlConnection, available_drivers
@@ -187,26 +190,60 @@ def peek_shape(settings: Settings, collection: str) -> dict[str, Any] | None:
     return cache[cache_key]
 
 
-def nesting_choice(settings: Settings | None = None, collection: str | None = None) -> str:
-    """Nesting strategies that make sense for the selected collection's shape."""
-    shape = peek_shape(settings, collection) if settings and collection else None
+def nesting_choice(
+    settings: Settings, collection: str, root_table: str | None = None
+) -> str:
+    """Ask how to split nested fields — only after a collection is chosen."""
+    shape = peek_shape(settings, collection)
     allowed, default = nesting_keys_for(shape)
     titles = {item[0]: item[1] for item in NESTING_OPTIONS}
     hints = {item[0]: item[2] for item in NESTING_OPTIONS}
-    current = st.session_state.get(NESTING_KEY)
-    if current not in allowed:
+    if st.session_state.get(NESTING_KEY) not in allowed:
         st.session_state[NESTING_KEY] = default
-    choice = st.radio(
-        "Ic ice yapi",
-        options=allowed,
-        format_func=lambda key: titles[key],
-        key=NESTING_KEY,
-        help="Secenekler, secilen collection'daki dizi ve nesne derinligine gore süzülür.",
-    )
-    if shape:
-        st.caption(shape_caption(shape))
-    st.caption(hints[choice])
-    return choice
+    root = root_table or sql_ident(collection)
+
+    with st.container(border=True):
+        st.markdown(
+            '<div class="m2s-nest-title">Bu collection nasil kirilsin?</div>',
+            unsafe_allow_html=True,
+        )
+        if shape:
+            st.caption(shape_caption(shape))
+        else:
+            st.caption("Secenekler bu collection'daki dizi ve nesne derinligine gore gelir.")
+
+        cols = st.columns(2)
+        picked: str | None = None
+        for i, key in enumerate(allowed):
+            selected = st.session_state[NESTING_KEY] == key
+            wrap = f"nest_on_{key}" if selected else f"nest_off_{key}"
+            tables, note = preview_tables(key, root, shape)
+            shown = tables[:8]
+            extra = f"\n+{len(tables) - 8} daha" if len(tables) > 8 else ""
+            preview = html.escape("\n".join(shown) + extra)
+            with cols[i % 2]:
+                with st.container(border=True, key=wrap):
+                    st.markdown(f"**{titles[key]}**")
+                    st.caption(hints[key])
+                    st.markdown(
+                        f'<div class="m2s-table-preview">{preview}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(note)
+                    if st.button(
+                        "Secildi" if selected else "Bunu kullan",
+                        type="primary" if selected else "secondary",
+                        width="stretch",
+                        key=f"nest_pick_{key}",
+                    ):
+                        picked = key
+        if picked and picked != st.session_state[NESTING_KEY]:
+            st.session_state[NESTING_KEY] = picked
+            st.rerun()
+    return st.session_state[NESTING_KEY]
+
+
+nesting_card = nesting_choice
 
 
 # --------------------------------------------------------------------------
