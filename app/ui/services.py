@@ -13,6 +13,7 @@ from core.inspect import (
     Profile,
     describe_shape,
     nesting_keys_for,
+    preview_table_count,
     preview_tables,
     profile_collection,
     shape_caption,
@@ -151,6 +152,54 @@ def collection_list(settings: Settings) -> tuple[list[str], str | None, str | No
 
 def invalidate_collections() -> None:
     st.session_state.pop(COLLECTIONS_KEY, None)
+    st.session_state.pop(COUNTS_KEY, None)
+
+
+COUNTS_KEY = "collection_counts"
+
+
+def format_int(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
+
+
+def collection_count(settings: Settings, name: str) -> int | None:
+    """Estimated document count, cached per collection for this session."""
+    if not settings.mongo_ready or not name:
+        return None
+    cache = st.session_state.setdefault(COUNTS_KEY, {})
+    if name in cache:
+        return cache[name]
+    mongo = mongo_client(settings.mongo)
+    try:
+        mongo.connect()
+        cache[name] = mongo.estimated_count(name)
+    except Exception:
+        cache[name] = None
+    finally:
+        mongo.close()
+    return cache[name]
+
+
+def collection_count_caption(
+    settings: Settings, name: str | None, sample: int | None = None
+) -> None:
+    if not name:
+        return
+    total = collection_count(settings, name)
+    if total is None:
+        return
+    text = f"Bu koleksiyonda yaklaşık **{format_int(total)}** kayıt var."
+    if sample is not None and total > 0:
+        if sample <= 0:
+            text += " Örnek 0 = tam tarama."
+        elif sample >= total:
+            text += f" Örnek ({format_int(sample)}) koleksiyonun tamamını kapsar."
+        else:
+            pct = 100.0 * sample / total
+            shown = f"{pct:.2f}" if pct < 0.1 else f"{pct:.1f}"
+            shown = shown.replace(".", ",")
+            text += f" Örnek {format_int(sample)}, kayıtların yaklaşık %{shown}'ü."
+    st.caption(text)
 
 
 SELECTED_COLLECTION_KEY = "selected_collection"
@@ -241,7 +290,12 @@ def nesting_choice(
             shown = tables[:8]
             extra = f"\n+{len(tables) - 8} daha" if len(tables) > 8 else ""
             preview = html.escape("\n".join(shown) + extra)
+            n_tables = preview_table_count(key, shape)
             with cols[i % 2]:
+                st.markdown(
+                    f'<div class="m2s-nest-count">{n_tables} tablo</div>',
+                    unsafe_allow_html=True,
+                )
                 with st.container(border=True, key=wrap):
                     st.markdown(f"**{titles[key]}**")
                     st.caption(hints[key])

@@ -1,9 +1,24 @@
 [theme]
 base = "dark"
 primaryColor = "#4c8dff"
+
+[theme.dark]
 backgroundColor = "#0d1117"
 secondaryBackgroundColor = "#161b22"
 textColor = "#e6edf3"
+
+[theme.light]
+backgroundColor = "#f6f8fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1f2328"
+
+[theme.dark.sidebar]
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+
+[theme.light.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f8fa"
 
 [client]
 toolbarMode = "minimal"

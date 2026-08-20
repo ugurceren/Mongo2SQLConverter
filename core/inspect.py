@@ -386,7 +386,6 @@ def drdl_type(sql: str) -> str:
 NESTING_DEEP = "deep"
 NESTING_HYBRID = "hybrid"
 NESTING_COLUMNS = "columns"
-NESTING_DOCUMENT = "document"
 
 NESTING_OPTIONS = (
     (
@@ -403,11 +402,6 @@ NESTING_OPTIONS = (
         NESTING_COLUMNS,
         "Tek tablo + JSON",
         "Bir belge = bir satır. Üst seviye skalerler kolon, nesne ve diziler JSON.",
-    ),
-    (
-        NESTING_DOCUMENT,
-        "Birebir belge",
-        "Tek tablo: mongo_id + document JSON. Şema yok, birebir kopya.",
     ),
 )
 
@@ -454,12 +448,12 @@ def nesting_keys_for(shape: dict[str, Any] | None) -> tuple[list[str], str]:
     has_deep = bool(shape.get("nested_arrays") or shape.get("nested_objects"))
     has_object = bool(shape.get("top_objects") or shape.get("nested_objects"))
     if has_top_array and has_deep:
-        return [NESTING_DEEP, NESTING_HYBRID, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_HYBRID
+        return [NESTING_DEEP, NESTING_HYBRID, NESTING_COLUMNS], NESTING_HYBRID
     if has_top_array:
-        return [NESTING_DEEP, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_DEEP
+        return [NESTING_DEEP, NESTING_COLUMNS], NESTING_DEEP
     if has_object:
-        return [NESTING_DEEP, NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_COLUMNS
-    return [NESTING_COLUMNS, NESTING_DOCUMENT], NESTING_COLUMNS
+        return [NESTING_DEEP, NESTING_COLUMNS], NESTING_COLUMNS
+    return [NESTING_COLUMNS], NESTING_COLUMNS
 
 
 def shape_caption(shape: dict[str, Any]) -> str:
@@ -484,13 +478,21 @@ def _child_table_name(root: str, array_path: str) -> str:
     return f"{root}_{sql_ident(array_path.replace('[]', '').replace('.', '_'))}"
 
 
+def preview_table_count(nesting: str, shape: dict[str, Any] | None) -> int:
+    """How many SQL tables this nesting would create (from a shape peek)."""
+    if nesting == NESTING_COLUMNS or not shape:
+        return 1
+    top = len(shape.get("top_arrays") or [])
+    if nesting == NESTING_HYBRID:
+        return 1 + top
+    return 1 + top + len(shape.get("nested_arrays") or [])
+
+
 def preview_tables(
     nesting: str, root_table: str, shape: dict[str, Any] | None
 ) -> tuple[list[str], str]:
     """Approximate SQL tables from a shape peek — not a full plan."""
     root = sql_ident(root_table) if root_table else "tablo"
-    if nesting == NESTING_DOCUMENT:
-        return [root], "Tek tablo: mongo_id + document JSON."
     if nesting == NESTING_COLUMNS:
         return [root], "Üst seviye skalerler kolon; nesne ve diziler JSON."
     if not shape:
@@ -587,51 +589,6 @@ def build_plan(
         and set(stat.concrete_types) - {"object"}
     }
     json_parents = set(shape_conflicts)
-
-    if nesting == NESTING_DOCUMENT:
-        id_stat = profile.stats.get("_id")
-        id_sql = "NVARCHAR(450)"
-        id_notes: list[str] = []
-        if id_stat:
-            id_sql, id_notes = sql_type_for(id_stat, headroom)
-            if id_sql == "NVARCHAR(MAX)":
-                id_sql = f"NVARCHAR({INDEX_KEY_LIMIT})"
-        columns = [
-            {
-                "path": "_id",
-                "name": "mongo_id",
-                "sql_type": id_sql,
-                "nullable": False,
-                "fill": 1.0,
-                "present": profile.documents,
-                "types": id_stat.concrete_types if id_stat else {"objectId": profile.documents},
-                "max_utf16": id_stat.max_utf16 if id_stat else 24,
-                "notes": id_notes,
-                "longest_sample": id_stat.longest_sample if id_stat else "",
-                "distinct": None,
-            },
-            {
-                "path": "",
-                "name": "document",
-                "sql_type": "NVARCHAR(MAX)",
-                "nullable": True,
-                "fill": 1.0,
-                "present": profile.documents,
-                "types": {"object": profile.documents},
-                "max_utf16": 0,
-                "notes": ["tum dokuman JSON olarak saklanir"],
-                "longest_sample": "",
-                "distinct": None,
-            },
-        ]
-        return {
-            "schema": schema,
-            "collection": collection,
-            "documents": profile.documents,
-            "nesting": nesting,
-            "root": {"table": root_table, "key_column": "mongo_id", "columns": columns},
-            "children": [],
-        }
 
     if nesting == NESTING_COLUMNS:
         for stat in profile.stats.values():
@@ -1135,7 +1092,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=NESTING_DEEP,
         help="How nested objects/arrays become tables: "
         "deep (child tables), hybrid (top arrays + JSON), "
-        "columns (one table, nested JSON), document (mongo_id + JSON).",
+        "columns (one table, nested JSON).",
     )
     parser.add_argument("--progress-every", type=int, default=1000)
     return parser

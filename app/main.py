@@ -98,6 +98,7 @@ with st.sidebar:
             ("nav_sql", page_sql, ":material/moving:", "SQL aktarımı"),
         ]
     )
+    theme.theme_toggle()
     _sidebar_status(SETTINGS)
 
 navigation.run()

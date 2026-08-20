@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Iterable, Literal, Sequence
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 State = Literal["ok", "warn", "off"]
 
@@ -129,6 +130,14 @@ CSS = """
     font-weight: 720;
     letter-spacing: -0.02em;
     margin: 0 0 0.4rem 0;
+}
+.m2s-nest-count {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--m2s-muted);
+    font-weight: 700;
+    margin: 0 0 0.35rem 0.15rem;
 }
 .m2s-table-preview {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -341,11 +350,15 @@ section[data-testid="stSidebar"] {
     background-color: rgba(76, 141, 255, 0.24) !important;
     border-color: rgba(76, 141, 255, 0.7) !important;
 }
+.st-key-nav_theme { margin: 0.85rem 0 0.2rem 0; }
+.st-key-nav_theme [data-testid="stRadio"] > label { display: none; }
+[data-testid="stSidebar"][aria-expanded="false"] .st-key-nav_theme { display: none !important; }
+
 .st-key-disc_database_drdl button {
-    min-height: 3rem !important;
-    font-size: 1.05rem !important;
+    min-height: 2.4rem !important;
+    font-size: 0.92rem !important;
     font-weight: 750 !important;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
     background: linear-gradient(135deg, #4c8dff, #22d3ee) !important;
     color: #041018 !important;
     border: 0 !important;
@@ -372,6 +385,35 @@ section[data-testid="stSidebar"] {
 .stTabs [data-baseweb="tab"] { padding: 0.4rem 0.9rem; }
 
 code, pre, .stCode { font-size: 0.82rem; }
+iframe[height="0"] { display: none !important; }
+</style>
+"""
+
+LIGHT_CSS = """
+<style>
+:root {
+    --m2s-border: rgba(31, 35, 40, 0.12);
+    --m2s-muted: #656d76;
+    --m2s-accent-soft: rgba(9, 105, 218, 0.10);
+}
+.m2s-step.active { color: #0a3069; }
+.m2s-step.active .m2s-step-n { background: var(--m2s-accent); color: #fff; }
+.m2s-step.done { color: #1a7f37; }
+.m2s-table-preview { color: #424a53; }
+.st-key-cta_conn [data-testid="stPageLink"] a,
+.st-key-cta_disc [data-testid="stPageLink"] a,
+.st-key-cta_sql [data-testid="stPageLink"] a,
+.st-key-cta_to_connections [data-testid="stPageLink"] a,
+.st-key-cta_to_discovery [data-testid="stPageLink"] a {
+    color: #0a3069 !important;
+}
+.st-key-cta_sql [data-testid="stPageLink"] a,
+.st-key-cta_to_transfer [data-testid="stPageLink"] a {
+    color: #9a3412 !important;
+}
+[data-testid="stExpandSidebarButton"] {
+    background: rgba(31, 35, 40, 0.04) !important;
+}
 </style>
 """
 
@@ -384,8 +426,63 @@ STEPS = (
 )
 
 
+def current_theme_type() -> str:
+    try:
+        return st.context.theme.type or "dark"
+    except Exception:
+        return "dark"
+
+
 def inject_css() -> None:
-    st.markdown(CSS, unsafe_allow_html=True)
+    extra = LIGHT_CSS if current_theme_type() == "light" else ""
+    st.markdown(CSS + extra, unsafe_allow_html=True)
+
+
+def _persist_browser_theme(name: str) -> None:
+    """Store Streamlit's Light/Dark preference and reload so widgets follow it."""
+    components.html(
+        f"""
+<script>
+const name = {name!r};
+const store = window.parent.localStorage;
+const value = JSON.stringify(name);
+const paths = new Set(["/", window.parent.location.pathname, "/discovery", "/transfer", "/connections"]);
+for (const path of paths) {{
+  store.setItem("stActiveTheme-" + path + "-v2", value);
+}}
+window.parent.location.reload();
+</script>
+        """,
+        height=0,
+    )
+
+
+def _on_theme_change() -> None:
+    picked = st.session_state.get("ui_theme")
+    st.session_state["_apply_theme"] = "Light" if picked == "Açık" else "Dark"
+
+
+def theme_toggle() -> None:
+    """Koyu / açık seçimi sol menüde. Üst çubuktaki tema menüsü gizlidir."""
+    actual = "Açık" if current_theme_type() == "light" else "Koyu"
+    if "ui_theme" not in st.session_state:
+        st.session_state["ui_theme"] = actual
+    pending = st.session_state.pop("_apply_theme", None)
+    with st.container(key="nav_theme"):
+        st.markdown(
+            '<div class="m2s-side-label">Tema</div>',
+            unsafe_allow_html=True,
+        )
+        st.radio(
+            "Tema",
+            ("Koyu", "Açık"),
+            horizontal=True,
+            key="ui_theme",
+            label_visibility="collapsed",
+            on_change=_on_theme_change,
+        )
+    if pending:
+        _persist_browser_theme(pending)
 
 
 def register_pages(pages: dict[str, object]) -> None:

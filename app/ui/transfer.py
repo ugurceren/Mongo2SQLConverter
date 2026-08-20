@@ -8,6 +8,7 @@ from app.ui import theme
 from app.ui.services import (
     Settings,
     apply_remembered_collection,
+    collection_count_caption,
     collection_list,
     mongo_client,
     nesting_card,
@@ -80,6 +81,8 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             )
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
+        else:
+            collection_count_caption(settings, collection)
 
     options["collection"] = collection
     options["schema"] = (schema or "").strip() or settings.schema
@@ -127,13 +130,26 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             sample = st.number_input(
                 "Profil örneği",
                 min_value=0,
-                value=0,
+                value=5000,
                 step=500,
                 key="tr_sample",
-                help="Yalnızca şema profili. 0 = tam tarama. Yazma bu değeri kullanmaz.",
+                help=(
+                    "Şema için kaç belge taransın. 5000 önerilir. "
+                    "0 = koleksiyonun tamamı. Aktarılacak belge sayısını değiştirmez."
+                ),
             )
         with row2[1]:
-            batch = st.number_input("Parti", min_value=50, value=500, step=50, key="tr_batch")
+            batch = st.number_input(
+                "Yazma partisi",
+                min_value=50,
+                value=500,
+                step=50,
+                key="tr_batch",
+                help=(
+                    "SQL'e bir seferde kaç belgelik paket yazılsın. "
+                    "Hızı ve belleği etkiler; aktarılacak belge sayısını değiştirmez."
+                ),
+            )
         with row2[2]:
             recreate = st.checkbox(
                 "Tabloları yeniden oluştur (DROP + CREATE)",
@@ -145,6 +161,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 "Yazmadan önce tabloları boşalt",
                 key="tr_clear",
                 disabled=incremental,
+                help="Hedef tablolardaki mevcut satırlar silinir, sonra aktarım başlar.",
             )
             allow_null = st.checkbox(
                 "Anahtar dışındaki kolonlar NULL kabul etsin",
@@ -152,6 +169,12 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 key="tr_null",
                 help="Örnekle profillenen alanlar başka belgelerde eksik olabilir.",
             )
+        st.caption(
+            "Profil örneği yalnız kolon tipi ve genişliği içindir; **5000 önerilir**. "
+            "**0 = tam tarama** (kesin genişlik). "
+            "Yazma partisi SQL'e kaç belgelik paket halinde yazılacağını ayarlar. "
+            "İkisi de kaç belgenin aktarılacağını değiştirmez; onu senkron seçimi belirler."
+        )
 
     options.update(
         {

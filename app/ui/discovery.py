@@ -8,13 +8,20 @@ from app.ui import theme
 from app.ui.services import (
     Settings,
     apply_remembered_collection,
+    collection_count_caption,
     collection_list,
     invalidate_collections,
     nesting_card,
     profile_many,
     remember_collection,
+    NESTING_KEY,
 )
-from core.inspect import render_database_ddl, render_database_drdl, sql_ident
+from core.inspect import (
+    NESTING_HYBRID,
+    render_database_ddl,
+    render_database_drdl,
+    sql_ident,
+)
 
 RESULT_KEYS = ("drdl", "ddl", "plan", "result_name", "result_scope")
 
@@ -24,9 +31,27 @@ def _clear_results() -> None:
         st.session_state.pop(key, None)
 
 
-def _overview(settings: Settings, collections: list[str]) -> None:
+def _overview(settings: Settings, collections: list[str]) -> bool:
     with st.container(border=True):
-        theme.card_title("Kaynak veritabanı", "Kayıtlı Mongo bağlantısından okunur.")
+        head = st.columns([2.2, 1.45], vertical_alignment="center")
+        with head[0]:
+            theme.card_title(
+                "Kaynak veritabanı",
+                "Kayıtlı Mongo bağlantısından okunur.",
+            )
+        with head[1]:
+            run_database = st.button(
+                "Veritabanı DRDL",
+                type="primary",
+                icon=":material/database:",
+                disabled=not collections,
+                width="stretch",
+                key="disc_database_drdl",
+                help=(
+                    "Tüm koleksiyonları tarar. Aşağıda kırılım seçtiyseniz onu kullanır; "
+                    "yoksa hibrit."
+                ),
+            )
         cols = st.columns([1.4, 1, 1, 1.1], vertical_alignment="bottom")
         cols[0].metric("Veritabanı", settings.mongo.get("database") or "—")
         cols[1].metric("Koleksiyon", len(collections))
@@ -38,9 +63,10 @@ def _overview(settings: Settings, collections: list[str]) -> None:
                 on_click=invalidate_collections,
                 width="stretch",
             )
+    return run_database
 
 
-def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
+def _pick_collection(settings: Settings, collections: list[str]) -> tuple[str | None, int]:
     with st.container(border=True):
         theme.card_title(
             "Koleksiyon seç",
@@ -65,11 +91,20 @@ def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
             sample = st.number_input(
                 "Örnek",
                 min_value=0,
-                value=0,
+                value=5000,
                 step=500,
                 key="disc_sample",
-                help="0 = tam tarama. Örnekleme hızlıdır ama uzunluklar alt sınır olur.",
+                help=(
+                    "Şema için kaç belge taransın. 5000 önerilir: hızlı ve tipik şekil için yeterli. "
+                    "0 = koleksiyonun tamamı; uzunluklar kesin olur, büyük koleksiyonda yavaştır."
+                ),
             )
+        st.caption(
+            "Örnek yalnız şema ölçümü içindir; **5000 önerilir**. "
+            "**0 = tam tarama** (kesin genişlik, yavaş). "
+            "Örneklemede max uzunluklar alt sınırdır — görünmeyen daha uzun değerler kesilebilir."
+        )
+        collection_count_caption(settings, collection, int(sample))
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
     remember_collection(collection)
@@ -89,7 +124,7 @@ def render(settings: Settings) -> None:
         theme.need_connections(["Mongo bağlantısı"])
 
     collections, error, warning = collection_list(settings)
-    _overview(settings, collections)
+    run_database = _overview(settings, collections)
 
     if error:
         st.error(error)
@@ -97,35 +132,23 @@ def render(settings: Settings) -> None:
         st.warning(warning)
 
     st.write("")
-    collection, sample = _pick_collection(collections)
+    collection, sample = _pick_collection(settings, collections)
 
     nesting = None
     run_collection = False
-    run_database = False
     if collection:
         st.write("")
         nesting = nesting_card(settings, collection, sql_ident(collection))
         st.write("")
-        actions = st.columns([1.5, 1.5, 2])
-        with actions[0]:
-            run_collection = st.button("Şemayı çıkar", width="stretch")
-        with actions[1]:
-            run_database = st.button(
-                "Veritabanı DRDL",
-                type="primary",
-                icon=":material/database:",
-                disabled=not collections,
-                width="stretch",
-                key="disc_database_drdl",
-                help="Seçilen kırılım ve örnek boyutuyla tüm koleksiyonları tarar.",
-            )
+        run_collection = st.button("Şemayı çıkar", type="primary", width="stretch")
 
-    if (run_collection or run_database) and nesting:
+    nest = nesting or st.session_state.get(NESTING_KEY) or NESTING_HYBRID
+    if (run_collection or run_database) and nest:
         whole_db = bool(run_database)
         targets = collections if whole_db else [collection]
         st.write("")
         plans, skipped, errors, total_docs = profile_many(
-            settings, targets, sample, settings.schema, nesting=nesting
+            settings, targets, sample, settings.schema, nesting=nest
         )
         if plans:
             database = settings.mongo.get("database") or "database"
