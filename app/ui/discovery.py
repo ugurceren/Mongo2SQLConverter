@@ -7,10 +7,12 @@ import streamlit as st
 from app.ui import theme
 from app.ui.services import (
     Settings,
+    apply_remembered_collection,
     collection_list,
     invalidate_collections,
     nesting_card,
     profile_many,
+    remember_collection,
 )
 from core.inspect import render_database_ddl, render_database_drdl, sql_ident
 
@@ -36,7 +38,6 @@ def _overview(settings: Settings, collections: list[str]) -> None:
                 on_click=invalidate_collections,
                 width="stretch",
             )
-        st.caption(settings.mongo.get("uri") or "Bağlantı kayıtlı değil.")
 
 
 def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
@@ -48,12 +49,14 @@ def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
         row = st.columns([2.6, 1.1], vertical_alignment="bottom")
         with row[0]:
             if collections:
+                apply_remembered_collection("disc_collection", collections)
+                empty = "disc_collection" not in st.session_state
                 collection = st.selectbox(
                     "Koleksiyon",
                     options=collections,
-                    index=None,
                     placeholder="Koleksiyon seçin...",
                     key="disc_collection",
+                    **({"index": None} if empty else {}),
                 )
             else:
                 collection = None
@@ -69,6 +72,7 @@ def _pick_collection(collections: list[str]) -> tuple[str | None, int]:
             )
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
+    remember_collection(collection)
     return collection, int(sample)
 
 

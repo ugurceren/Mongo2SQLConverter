@@ -7,10 +7,12 @@ import streamlit as st
 from app.ui import theme
 from app.ui.services import (
     Settings,
+    apply_remembered_collection,
     collection_list,
     mongo_client,
     nesting_card,
     profile_one,
+    remember_collection,
     sql_target,
 )
 from core.inspect import nesting_labels, render_database_ddl, sql_ident
@@ -53,16 +55,19 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         row = st.columns([2.2, 1.6, 1.6], vertical_alignment="bottom")
         with row[0]:
             if collections:
+                apply_remembered_collection("tr_collection", collections)
+                empty = "tr_collection" not in st.session_state
                 collection = st.selectbox(
                     "Kaynak koleksiyon",
                     options=collections,
-                    index=None,
                     placeholder="Koleksiyon seçin...",
                     key="tr_collection",
+                    **({"index": None} if empty else {}),
                 )
             else:
                 collection = None
                 st.selectbox("Kaynak koleksiyon", options=["Koleksiyon yok"], disabled=True)
+        remember_collection(collection)
         with row[1]:
             schema = st.text_input("Hedef şema", value=settings.schema, key="tr_schema")
         with row[2]:

@@ -153,6 +153,26 @@ def invalidate_collections() -> None:
     st.session_state.pop(COLLECTIONS_KEY, None)
 
 
+SELECTED_COLLECTION_KEY = "selected_collection"
+
+
+def remember_collection(name: str | None) -> None:
+    """Keep the discovery collection so transfer can open on the same one."""
+    if name:
+        st.session_state[SELECTED_COLLECTION_KEY] = name
+
+
+def apply_remembered_collection(widget_key: str, collections: list[str]) -> None:
+    """Pre-fill a collection selectbox from discovery, unless the user already changed it."""
+    source = st.session_state.get(SELECTED_COLLECTION_KEY)
+    if source not in collections:
+        return
+    stamp = f"{widget_key}_from_discovery"
+    if st.session_state.get(stamp) != source:
+        st.session_state[widget_key] = source
+        st.session_state[stamp] = source
+
+
 NESTING_KEY = "nesting_mode"
 SHAPE_KEY = "shape_peek"
 PEEK_SAMPLE = 5000
