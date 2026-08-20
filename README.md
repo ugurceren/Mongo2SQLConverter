@@ -17,7 +17,13 @@ cd "D:\Code and Business\Mongo2SQLConverter"
 pip install -r requirements.txt
 ```
 
-Baglanti bilgileri `config.yaml` icinde yoktur. Streamlit'te **Baglantilar** sayfasindan doldurun; kayit `config.local.yaml` dosyasina yazilir (git'e eklenmez). Elle yazmak isterseniz `config.local.example.yaml` ornektir, icinde sifre yoktur.
+Baglanti bilgileri `config.yaml` icinde yoktur. Streamlit'te **Baglantilar** sayfasindan doldurun; kayit `config.local.yaml` dosyasina yazilir (git'e eklenmez). Elle yazmak icin:
+
+```powershell
+copy config.local.example.yaml config.local.yaml
+```
+
+Ornek dosyada `mydb`, `user`, `srv\INSTANCE` gibi yer tutucular vardir; gercek sifre ve sunucu adini kendiniz yazin.
 
 ## Kullanim
 
