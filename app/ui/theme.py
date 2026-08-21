@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, Literal, Sequence
 
+import re
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -19,26 +20,109 @@ CSS = """
     --m2s-ok: #3fb950;
     --m2s-warn: #d29922;
     --m2s-off: #6e7681;
-    --m2s-rail: 62px;
+    --m2s-rail: 76px;
 }
 
 /* Keep the toolbar mounted: it hosts the button that reopens the sidebar. */
 [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], footer { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-[data-testid="stExpandSidebarButton"] {
-    background: rgba(240, 246, 252, 0.06) !important;
-    border: 1px solid var(--m2s-border) !important;
-    border-radius: 8px !important;
-    padding: 0.15rem 0.25rem !important;
+[data-testid="stHeader"] {
+    background: transparent !important;
 }
+
+/* Collapse control sits on the right of the open sidebar header. */
+[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarHeader"] {
+    position: absolute !important;
+    top: 12px !important;
+    right: 10px !important;
+    left: auto !important;
+    width: auto !important;
+    height: 44px !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+    align-items: center !important;
+    z-index: 6;
+    background: transparent !important;
+    overflow: visible !important;
+}
+[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stLogoSpacer"] {
+    display: none !important;
+}
+[data-testid="stSidebarCollapseButton"] {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    top: auto !important;
+    transform: none !important;
+    display: flex !important;
+    justify-content: flex-end;
+    width: auto !important;
+    margin: 0 !important;
+}
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] button {
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stExpandSidebarButton"] {
+    position: relative !important;
+    inset: auto !important;
+    width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    padding: 0 !important;
+    border-radius: 12px !important;
+    background: rgba(240, 246, 252, 0.10) !important;
+    border: 1px solid var(--m2s-border) !important;
+    color: #e6edf3 !important;
+}
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {
+    color: #e6edf3 !important;
+    -webkit-text-fill-color: #e6edf3 !important;
+    font-size: 22px !important;
+}
+[data-testid="stSidebarCollapseButton"] button:hover,
 [data-testid="stExpandSidebarButton"]:hover {
     background: var(--m2s-accent-soft) !important;
     border-color: rgba(76, 141, 255, 0.45) !important;
 }
+/* Header stacking is below the rail; lift it so the reopen button sits on top. */
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stHeader"] {
+    z-index: 1000004 !important;
+    pointer-events: none !important;
+    overflow: visible !important;
+}
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stToolbar"],
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stHeader"] * {
+    pointer-events: none !important;
+}
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stExpandSidebarButton"] {
+    position: fixed !important;
+    left: 16px !important;
+    top: 10px !important;
+    z-index: 1000005 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    pointer-events: auto !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #2b303b !important;
+    border: 1px solid #3d4450 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stExpandSidebarButton"] * {
+    pointer-events: auto !important;
+}
 
-.block-container {
+section[data-testid="stMain"] .block-container {
     max-width: 1220px;
-    padding-top: 2.4rem;
+    padding-top: 3.2rem;
     padding-bottom: 4rem;
 }
 
@@ -66,11 +150,12 @@ CSS = """
 /* ---------- stepper ---------- */
 .m2s-stepper {
     display: flex; align-items: center; gap: 0.4rem;
-    margin: 0 0 1.45rem 0;
+    margin: 0.15rem 0 1.45rem 0;
+    overflow: visible;
 }
 .m2s-step {
     display: flex; align-items: center; gap: 0.45rem;
-    padding: 0.32rem 0.72rem;
+    padding: 0.38rem 0.78rem;
     border-radius: 999px;
     border: 1px solid var(--m2s-border);
     color: var(--m2s-muted);
@@ -84,14 +169,45 @@ CSS = """
     font-size: 0.68rem; font-weight: 750;
     background: rgba(240, 246, 252, 0.08);
 }
-.m2s-step.active {
-    color: #d7e8ff;
-    border-color: rgba(76, 141, 255, 0.55);
-    background: var(--m2s-accent-soft);
+.m2s-step-connections {
+    color: #9ee3a8;
+    border-color: rgba(63, 185, 80, 0.5);
+    background: rgba(63, 185, 80, 0.12);
 }
-.m2s-step.active .m2s-step-n { background: var(--m2s-accent); color: #041018; }
-.m2s-step.done { color: #9ee3a8; border-color: rgba(63, 185, 80, 0.35); }
-.m2s-step.done .m2s-step-n { background: rgba(63, 185, 80, 0.28); color: #b6f0be; }
+.m2s-step-connections .m2s-step-n { background: rgba(63, 185, 80, 0.32); color: #b6f0be; }
+.m2s-step-connections.active {
+    color: #b6f0be;
+    border-color: #3fb950;
+    background: rgba(63, 185, 80, 0.24);
+    box-shadow: 0 0 16px rgba(63, 185, 80, 0.22);
+}
+.m2s-step-connections.active .m2s-step-n { background: #3fb950; color: #041018; }
+.m2s-step-discovery {
+    color: #7af0ff;
+    border-color: rgba(34, 211, 238, 0.5);
+    background: rgba(34, 211, 238, 0.12);
+}
+.m2s-step-discovery .m2s-step-n { background: rgba(34, 211, 238, 0.32); color: #b8f7ff; }
+.m2s-step-discovery.active {
+    color: #b8f7ff;
+    border-color: #22d3ee;
+    background: rgba(34, 211, 238, 0.24);
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.22);
+}
+.m2s-step-discovery.active .m2s-step-n { background: #22d3ee; color: #041018; }
+.m2s-step-transfer {
+    color: #ffd08a;
+    border-color: rgba(251, 146, 60, 0.5);
+    background: rgba(251, 146, 60, 0.12);
+}
+.m2s-step-transfer .m2s-step-n { background: rgba(251, 146, 60, 0.32); color: #ffe0b0; }
+.m2s-step-transfer.active {
+    color: #ffe0b0;
+    border-color: #fb923c;
+    background: rgba(251, 146, 60, 0.24);
+    box-shadow: 0 0 16px rgba(251, 146, 60, 0.22);
+}
+.m2s-step-transfer.active .m2s-step-n { background: #fb923c; color: #041018; }
 .m2s-step-line {
     flex: 1; height: 1px; background: var(--m2s-border); min-width: 0.8rem;
 }
@@ -196,7 +312,7 @@ section[data-testid="stSidebar"] {
 
 .m2s-brand {
     display: flex; align-items: center; gap: 0.75rem;
-    margin: 0 0 1rem 0; padding: 0.1rem 0.05rem 1rem 0.05rem;
+    margin: 0 0 1rem 0; padding: 0.1rem 3.2rem 1rem 0.05rem;
     border-bottom: 1px solid var(--m2s-border);
 }
 .m2s-logo {
@@ -266,18 +382,18 @@ section[data-testid="stSidebar"] {
 .st-key-nav_sql [data-testid="stPageLink"] p { color: #ffd08a !important; }
 
 .st-key-nav_conn [data-testid="stPageLink"] a {
-    color: #f0d4ff !important;
-    background: linear-gradient(135deg, rgba(167, 139, 250, 0.44), rgba(232, 121, 249, 0.16)) !important;
-    border: 1px solid #c084fc !important;
-    box-shadow: inset 3px 0 0 #c084fc, 0 8px 20px rgba(167, 139, 250, 0.18);
+    color: #b6f0be !important;
+    background: linear-gradient(135deg, rgba(63, 185, 80, 0.42), rgba(34, 211, 238, 0.10)) !important;
+    border: 1px solid #3fb950 !important;
+    box-shadow: inset 3px 0 0 #3fb950, 0 8px 20px rgba(63, 185, 80, 0.18);
 }
 .st-key-nav_conn [data-testid="stPageLink"] a:hover,
 .st-key-nav_conn [data-testid="stPageLink"] a[aria-current="page"] {
-    background: linear-gradient(135deg, rgba(167, 139, 250, 0.62), rgba(232, 121, 249, 0.26)) !important;
-    box-shadow: inset 3px 0 0 #e9d5ff, 0 0 24px rgba(167, 139, 250, 0.44);
+    background: linear-gradient(135deg, rgba(63, 185, 80, 0.60), rgba(34, 211, 238, 0.16)) !important;
+    box-shadow: inset 3px 0 0 #9ee3a8, 0 0 24px rgba(63, 185, 80, 0.42);
 }
 .st-key-nav_conn [data-testid="stIconMaterial"],
-.st-key-nav_conn [data-testid="stPageLink"] p { color: #e9b8ff !important; }
+.st-key-nav_conn [data-testid="stPageLink"] p { color: #9ee3a8 !important; }
 
 .m2s-side-block { margin-top: 1.15rem; }
 .m2s-side-label {
@@ -302,36 +418,68 @@ section[data-testid="stSidebar"] {
     max-width: var(--m2s-rail) !important;
     transform: none !important;
 }
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+}
 [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
+    padding-top: 0 !important;
     padding-left: 0.4rem !important;
     padding-right: 0.4rem !important;
     overflow-x: hidden;
 }
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0 !important;
+}
 [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] {
-    display: flex !important;
-    opacity: 1 !important;
+    display: none !important;
 }
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-brand,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-status { justify-content: center; }
+[data-testid="stSidebar"][aria-expanded="false"] .m2s-brand {
+    padding: 0.1rem 0.05rem 1rem 0.05rem;
+    min-height: 65px;
+}
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-brand-text,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-label,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-status-text,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-foot,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-rail-hide { display: none !important; }
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-logo {
-    width: 36px; height: 36px; flex-basis: 36px; font-size: 0.62rem;
-}
-[data-testid="stSidebar"][aria-expanded="false"] .m2s-side-block {
-    margin-top: 0.7rem; padding-top: 0.7rem;
-    border-top: 1px solid var(--m2s-border);
+    width: 46px; height: 46px; flex-basis: 46px; font-size: 0.78rem;
+    visibility: hidden;
 }
 [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a {
     justify-content: center !important;
+    align-items: center !important;
     font-size: 0 !important;
-    padding: 0.55rem 0.3rem !important;
+    width: 48px !important;
+    height: 59px !important;
+    min-height: 59px !important;
+    padding: 0 !important;
+    margin: 0 auto;
+    border-radius: 14px !important;
+    transform: none !important;
 }
-[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a span {
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a:hover {
+    transform: none !important;
+    filter: brightness(1.12);
+}
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] a p {
     display: none !important;
+}
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stPageLink"] [data-testid="stIconMaterial"] {
+    display: inline-flex !important;
+    font-size: 1.5rem !important;
+    line-height: 1 !important;
 }
 
 /* ---------- controls ---------- */
@@ -350,27 +498,81 @@ section[data-testid="stSidebar"] {
     background-color: rgba(76, 141, 255, 0.24) !important;
     border-color: rgba(76, 141, 255, 0.7) !important;
 }
-.st-key-nav_theme { margin: 0.85rem 0 0.2rem 0; }
-.st-key-nav_theme [data-testid="stRadio"] > label { display: none; }
-[data-testid="stSidebar"][aria-expanded="false"] .st-key-nav_theme { display: none !important; }
+.m2s-theme-dock {
+    position: fixed !important;
+    top: 10px !important;
+    right: 12px !important;
+    z-index: 1000010;
+    width: var(--m2s-rail);
+    max-width: var(--m2s-rail);
+    height: 36px;
+    margin: 0;
+    padding: 3px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    border-radius: 999px;
+    background: #1e2229;
+    border: 1px solid #2b303b;
+    pointer-events: auto;
+}
+.m2s-theme-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.m2s-theme-btn svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+    stroke: #888da8;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.m2s-theme-dock[data-mode="dark"] .m2s-theme-moon {
+    background: #2b303b;
+}
+.m2s-theme-dock[data-mode="dark"] .m2s-theme-moon svg { stroke: #ffffff; }
+.m2s-theme-dock[data-mode="light"] {
+    background: #f0f2f5;
+    border-color: #d8dce2;
+}
+.m2s-theme-dock[data-mode="light"] .m2s-theme-sun {
+    background: #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10);
+}
+.m2s-theme-dock[data-mode="light"] .m2s-theme-moon svg,
+.m2s-theme-dock[data-mode="light"] .m2s-theme-sun svg { stroke: #333333; }
+.stElementContainer:has(.m2s-theme-dock),
+.stHtml:has(.m2s-theme-dock),
+.stHtml:has(.m2s-theme-boot),
+.stElementContainer:has(.m2s-theme-boot) {
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    position: absolute !important;
+    pointer-events: none !important;
+}
 
 .st-key-disc_database_drdl button {
-    min-height: 2.4rem !important;
-    font-size: 0.92rem !important;
-    font-weight: 750 !important;
-    letter-spacing: 0.01em;
     background: linear-gradient(135deg, #4c8dff, #22d3ee) !important;
     color: #041018 !important;
     border: 0 !important;
-    box-shadow: 0 8px 22px rgba(34, 211, 238, 0.28);
-}
-.st-key-disc_database_drdl button:hover {
-    filter: brightness(1.08);
-    box-shadow: 0 10px 28px rgba(34, 211, 238, 0.4);
-}
-.st-key-disc_database_drdl button:disabled {
-    opacity: 0.45 !important;
-    box-shadow: none !important;
 }
 
 [data-testid="stMetricLabel"] p {
@@ -392,27 +594,192 @@ iframe[height="0"] { display: none !important; }
 LIGHT_CSS = """
 <style>
 :root {
-    --m2s-border: rgba(31, 35, 40, 0.12);
-    --m2s-muted: #656d76;
-    --m2s-accent-soft: rgba(9, 105, 218, 0.10);
+    --m2s-accent: #0969da;
+    --m2s-accent-soft: rgba(9, 105, 218, 0.12);
+    --m2s-border: rgba(31, 35, 40, 0.14);
+    --m2s-muted: #57606a;
+    --m2s-ok: #1a7f37;
+    --m2s-warn: #9a6700;
+    --m2s-off: #8c959f;
 }
-.m2s-step.active { color: #0a3069; }
-.m2s-step.active .m2s-step-n { background: var(--m2s-accent); color: #fff; }
-.m2s-step.done { color: #1a7f37; }
+
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background-color: #f4f6f8 !important;
+    color: #1f2328 !important;
+    color-scheme: light;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+section[data-testid="stSidebar"] {
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+    border-right-color: var(--m2s-border) !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] span {
+    color: #1f2328 !important;
+}
+
+.m2s-brand-name { color: #1f2328; }
+.m2s-title, .m2s-section-title { color: #1f2328; }
+.m2s-section-kicker { color: #0550ae; }
+.m2s-step-connections {
+    color: #14532d;
+    border-color: #16a34a;
+    background: #dcfce7;
+}
+.m2s-step-connections .m2s-step-n { background: rgba(22, 163, 74, 0.22); color: #14532d; }
+.m2s-step-connections.active {
+    color: #14532d;
+    border-color: #15803d;
+    background: #bbf7d0;
+    box-shadow: none;
+}
+.m2s-step-connections.active .m2s-step-n { background: #16a34a; color: #fff; }
+.m2s-step-discovery {
+    color: #0f4c5c;
+    border-color: #0e7490;
+    background: #d9f6fb;
+}
+.m2s-step-discovery .m2s-step-n { background: rgba(14, 116, 144, 0.2); color: #0f4c5c; }
+.m2s-step-discovery.active {
+    color: #0f4c5c;
+    border-color: #155e75;
+    background: #c5eef6;
+    box-shadow: none;
+}
+.m2s-step-discovery.active .m2s-step-n { background: #0e7490; color: #fff; }
+.m2s-step-transfer {
+    color: #7c2d12;
+    border-color: #c2410c;
+    background: #ffedd5;
+}
+.m2s-step-transfer .m2s-step-n { background: rgba(194, 65, 12, 0.18); color: #7c2d12; }
+.m2s-step-transfer.active {
+    color: #7c2d12;
+    border-color: #9a3412;
+    background: #fed7aa;
+    box-shadow: none;
+}
+.m2s-step-transfer.active .m2s-step-n { background: #c2410c; color: #fff; }
 .m2s-table-preview { color: #424a53; }
+
+.st-key-nav_schema [data-testid="stPageLink"] a {
+    color: #0f4c5c !important;
+    background: linear-gradient(135deg, #d9f6fb, #e8f4ff) !important;
+    border: 1px solid #0e7490 !important;
+    box-shadow: inset 3px 0 0 #0e7490, 0 4px 12px rgba(14, 116, 144, 0.12);
+}
+.st-key-nav_schema [data-testid="stPageLink"] a:hover,
+.st-key-nav_schema [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, #c5eef6, #dbeafe) !important;
+    box-shadow: inset 3px 0 0 #155e75, 0 0 0 1px rgba(14, 116, 144, 0.25);
+}
+.st-key-nav_schema [data-testid="stIconMaterial"],
+.st-key-nav_schema [data-testid="stPageLink"] p { color: #0f4c5c !important; }
+
+.st-key-nav_sql [data-testid="stPageLink"] a {
+    color: #7c2d12 !important;
+    background: linear-gradient(135deg, #ffedd5, #fef3c7) !important;
+    border: 1px solid #c2410c !important;
+    box-shadow: inset 3px 0 0 #c2410c, 0 4px 12px rgba(194, 65, 12, 0.12);
+}
+.st-key-nav_sql [data-testid="stPageLink"] a:hover,
+.st-key-nav_sql [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, #fed7aa, #fde68a) !important;
+    box-shadow: inset 3px 0 0 #9a3412, 0 0 0 1px rgba(194, 65, 12, 0.25);
+}
+.st-key-nav_sql [data-testid="stIconMaterial"],
+.st-key-nav_sql [data-testid="stPageLink"] p { color: #7c2d12 !important; }
+
+.st-key-nav_conn [data-testid="stPageLink"] a {
+    color: #14532d !important;
+    background: linear-gradient(135deg, #dcfce7, #ecfccb) !important;
+    border: 1px solid #16a34a !important;
+    box-shadow: inset 3px 0 0 #16a34a, 0 4px 12px rgba(22, 163, 74, 0.12);
+}
+.st-key-nav_conn [data-testid="stPageLink"] a:hover,
+.st-key-nav_conn [data-testid="stPageLink"] a[aria-current="page"] {
+    background: linear-gradient(135deg, #bbf7d0, #d9f99d) !important;
+    box-shadow: inset 3px 0 0 #15803d, 0 0 0 1px rgba(22, 163, 74, 0.25);
+}
+.st-key-nav_conn [data-testid="stIconMaterial"],
+.st-key-nav_conn [data-testid="stPageLink"] p { color: #14532d !important; }
+
 .st-key-cta_conn [data-testid="stPageLink"] a,
 .st-key-cta_disc [data-testid="stPageLink"] a,
-.st-key-cta_sql [data-testid="stPageLink"] a,
 .st-key-cta_to_connections [data-testid="stPageLink"] a,
 .st-key-cta_to_discovery [data-testid="stPageLink"] a {
     color: #0a3069 !important;
+    background: #dbeafe !important;
+    border-color: #2563eb !important;
 }
 .st-key-cta_sql [data-testid="stPageLink"] a,
 .st-key-cta_to_transfer [data-testid="stPageLink"] a {
-    color: #9a3412 !important;
+    color: #7c2d12 !important;
+    background: #ffedd5 !important;
+    border-color: #c2410c !important;
 }
+
+.stButton button {
+    color: #1f2328 !important;
+    background: #ffffff !important;
+    border: 1px solid rgba(31, 35, 40, 0.18) !important;
+}
+button[kind="primary"], button[data-testid="stBaseButton-primary"] {
+    background: #0969da !important;
+    color: #ffffff !important;
+    border: 0 !important;
+}
+.st-key-disc_database_drdl button {
+    background: linear-gradient(135deg, #2f81f7, #0891b2) !important;
+    color: #041018 !important;
+    border: 0 !important;
+}
+.st-key-mongo_test button,
+.st-key-sql_test button {
+    background: #dbeafe !important;
+    color: #0a3069 !important;
+    border: 1px solid #2563eb !important;
+}
+
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+    color: #1f2328 !important;
+    -webkit-text-fill-color: #1f2328 !important;
+    background-color: #ffffff !important;
+}
+[data-baseweb="select"] > div,
+[data-baseweb="base-input"] {
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+}
+[data-testid="stWidgetLabel"] p,
+[data-testid="stMarkdownContainer"] p,
+.stCaption, [data-testid="stCaptionContainer"] {
+    color: #1f2328 !important;
+}
+[data-testid="stCaptionContainer"] { color: #57606a !important; }
+[data-testid="stMetricValue"] { color: #1f2328 !important; }
+[data-testid="stSidebarCollapseButton"] button,
 [data-testid="stExpandSidebarButton"] {
-    background: rgba(31, 35, 40, 0.04) !important;
+    background: #ffffff !important;
+    border: 1px solid rgba(31, 35, 40, 0.22) !important;
+    color: #1f2328 !important;
+    box-shadow: 0 1px 2px rgba(31, 35, 40, 0.12);
+}
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stExpandSidebarButton"] {
+    background: #ffffff !important;
+    border: 1px solid #d8dce2 !important;
+    color: #1f2328 !important;
+}
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"] {
+    color: #1f2328 !important;
+    -webkit-text-fill-color: #1f2328 !important;
 }
 </style>
 """
@@ -426,63 +793,113 @@ STEPS = (
 )
 
 
-def current_theme_type() -> str:
-    try:
-        return st.context.theme.type or "dark"
-    except Exception:
-        return "dark"
+def _light_css_scoped() -> str:
+    raw = LIGHT_CSS.replace("<style>", "").replace("</style>", "").strip()
+    chunks: list[str] = []
+    for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", raw):
+        selectors = match.group(1).strip()
+        body = match.group(2)
+        if selectors.startswith(":root"):
+            chunks.append(f'html[data-m2s-theme="light"] {{{body}}}')
+            continue
+        parts = [part.strip() for part in selectors.split(",") if part.strip()]
+        scoped = ", ".join(f'html[data-m2s-theme="light"] {part}' for part in parts)
+        chunks.append(f"{scoped} {{{body}}}")
+    return "\n".join(chunks)
 
 
 def inject_css() -> None:
-    extra = LIGHT_CSS if current_theme_type() == "light" else ""
+    extra = f"<style>{_light_css_scoped()}</style>"
     st.markdown(CSS + extra, unsafe_allow_html=True)
 
 
-def _persist_browser_theme(name: str) -> None:
-    """Store Streamlit's Light/Dark preference and reload so widgets follow it."""
+def theme_toggle() -> None:
+    """Sağ üstte ay / güneş; tıklama Streamlit rerun yapmaz."""
     components.html(
-        f"""
+        """
 <script>
-const name = {name!r};
-const store = window.parent.localStorage;
-const value = JSON.stringify(name);
-const paths = new Set(["/", window.parent.location.pathname, "/discovery", "/transfer", "/connections"]);
-for (const path of paths) {{
-  store.setItem("stActiveTheme-" + path + "-v2", value);
-}}
-window.parent.location.reload();
+(function () {
+  var win = window.parent && window.parent !== window ? window.parent : window;
+  var doc = win.document;
+  var store = win.localStorage;
+  var session = win.sessionStorage;
+  function apply(kind) {
+    win.__m2sTheme = kind;
+    doc.documentElement.setAttribute("data-m2s-theme", kind);
+    var dock = doc.querySelector(".m2s-theme-dock");
+    if (dock) dock.setAttribute("data-mode", kind);
+  }
+  function forceNativeDefaults() {
+    var encoded = JSON.stringify("Dark");
+    var needReload = false;
+    try {
+      Object.keys(store).forEach(function (key) {
+        if (key.startsWith("stActiveTheme-") && store.getItem(key) !== encoded) {
+          store.setItem(key, encoded);
+          needReload = true;
+        }
+      });
+      ["/", "/connections", "/discovery", "/transfer"].forEach(function (path) {
+        var key = "stActiveTheme-" + path + "-v2";
+        if (store.getItem(key) !== encoded) {
+          store.setItem(key, encoded);
+          needReload = true;
+        }
+      });
+      if (store.getItem("stSidebarCollapsed-") === "true") {
+        store.setItem("stSidebarCollapsed-", "false");
+        needReload = true;
+      }
+      if (needReload && session.getItem("m2s-boot-reload") !== "1") {
+        session.setItem("m2s-boot-reload", "1");
+        win.location.reload();
+        return true;
+      }
+    } catch (err) {}
+    return false;
+  }
+  function expandSidebar() {
+    try { store.setItem("stSidebarCollapsed-", "false"); } catch (err) {}
+    var tries = 0;
+    var timer = setInterval(function () {
+      var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+      var open = sidebar && sidebar.getAttribute("aria-expanded") === "true";
+      if (open || ++tries > 25) {
+        clearInterval(timer);
+        return;
+      }
+      var btn = doc.querySelector('[data-testid="stExpandSidebarButton"]');
+      if (btn) btn.click();
+    }, 80);
+  }
+  var dock = doc.querySelector(".m2s-theme-dock");
+  if (!dock) {
+    dock = doc.createElement("div");
+    dock.className = "m2s-theme-dock";
+    dock.innerHTML =
+      '<button type="button" class="m2s-theme-btn m2s-theme-moon" title="Koyu tema" aria-label="Koyu tema">' +
+      '<svg viewBox="0 0 24 24"><path d="M21 14.3A8.4 8.4 0 1 1 9.7 3 7 7 0 0 0 21 14.3z"/></svg></button>' +
+      '<button type="button" class="m2s-theme-btn m2s-theme-sun" title="Açık tema" aria-label="Açık tema">' +
+      '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/>' +
+      '<path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>';
+    doc.body.appendChild(dock);
+    dock.querySelector(".m2s-theme-moon").addEventListener("click", function () { apply("dark"); });
+    dock.querySelector(".m2s-theme-sun").addEventListener("click", function () { apply("light"); });
+  }
+  if (!win.__m2sBooted) {
+    win.__m2sBooted = true;
+    apply("dark");
+    if (forceNativeDefaults()) return;
+    expandSidebar();
+  } else {
+    apply(win.__m2sTheme || "dark");
+  }
+})();
 </script>
         """,
         height=0,
+        scrolling=False,
     )
-
-
-def _on_theme_change() -> None:
-    picked = st.session_state.get("ui_theme")
-    st.session_state["_apply_theme"] = "Light" if picked == "Açık" else "Dark"
-
-
-def theme_toggle() -> None:
-    """Koyu / açık seçimi sol menüde. Üst çubuktaki tema menüsü gizlidir."""
-    actual = "Açık" if current_theme_type() == "light" else "Koyu"
-    if "ui_theme" not in st.session_state:
-        st.session_state["ui_theme"] = actual
-    pending = st.session_state.pop("_apply_theme", None)
-    with st.container(key="nav_theme"):
-        st.markdown(
-            '<div class="m2s-side-label">Tema</div>',
-            unsafe_allow_html=True,
-        )
-        st.radio(
-            "Tema",
-            ("Koyu", "Açık"),
-            horizontal=True,
-            key="ui_theme",
-            label_visibility="collapsed",
-            on_change=_on_theme_change,
-        )
-    if pending:
-        _persist_browser_theme(pending)
 
 
 def register_pages(pages: dict[str, object]) -> None:
@@ -500,7 +917,7 @@ def stepper(active: str) -> None:
             chips.append('<span class="m2s-step-line"></span>')
         kind = "active" if key == active else ("done" if i < active_at else "")
         chips.append(
-            f'<div class="m2s-step {kind}">'
+            f'<div class="m2s-step m2s-step-{key} {kind}">'
             f'<span class="m2s-step-n">{num}</span>{label}</div>'
         )
     st.markdown(f'<div class="m2s-stepper">{"".join(chips)}</div>', unsafe_allow_html=True)

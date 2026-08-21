@@ -21,6 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 theme.inject_css()
+theme.theme_toggle()
 
 SETTINGS: Settings = load_state()
 
@@ -98,7 +99,6 @@ with st.sidebar:
             ("nav_sql", page_sql, ":material/moving:", "SQL aktarımı"),
         ]
     )
-    theme.theme_toggle()
     _sidebar_status(SETTINGS)
 
 navigation.run()

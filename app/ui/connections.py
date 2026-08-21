@@ -13,7 +13,7 @@ from app.ui.services import (
     sql_target,
 )
 from core.mssql import MssqlConnection, available_drivers
-from core.settings import LOCAL_CONFIG_PATH, save_connection_overrides
+from core.settings import save_connection_overrides
 
 
 SAVE_FLASH = "conn_saved"
@@ -38,7 +38,6 @@ def _show_saved() -> None:
     if not label:
         return
     st.success(f"**{label}** ayarları kaydedildi.")
-    st.caption(str(LOCAL_CONFIG_PATH))
 
 
 def _test_mongo(mongo_cfg: dict) -> None:
@@ -248,10 +247,9 @@ def render(settings: Settings) -> None:
         "Yapılandırma",
         "Bağlantılar",
         "Kaynak ve hedef ayrı tutulur: Mongo olmadan hiçbir şey çalışmaz, SQL yalnızca "
-        "veri yazarken devreye girer. Kaydet, değerleri aşağıdaki dosyaya yazar.",
+        "veri yazarken devreye girer. Kaydet, değerleri bu makinede tutar; git'e yazılmaz.",
         step="connections",
     )
-    st.caption(f"Kayıt dosyası · `{LOCAL_CONFIG_PATH}`  ·  git'e eklenmez")
     _show_saved()
     _mongo_card(settings)
     st.write("")

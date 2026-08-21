@@ -33,7 +33,7 @@ def _clear_results() -> None:
 
 def _overview(settings: Settings, collections: list[str]) -> bool:
     with st.container(border=True):
-        head = st.columns([2.2, 1.45], vertical_alignment="center")
+        head = st.columns([3.4, 1.1], vertical_alignment="center")
         with head[0]:
             theme.card_title(
                 "Kaynak veritabanı",
@@ -43,7 +43,6 @@ def _overview(settings: Settings, collections: list[str]) -> bool:
             run_database = st.button(
                 "Veritabanı DRDL",
                 type="primary",
-                icon=":material/database:",
                 disabled=not collections,
                 width="stretch",
                 key="disc_database_drdl",
