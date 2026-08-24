@@ -27,6 +27,49 @@ HINT_SQL_DB = "MyWarehouse"
 HINT_SQL_SCHEMA = "dbo"
 HINT_SQL_USER = "sa"
 
+# Example-file values treated as hints, not filled-in data.
+_EXAMPLE_MONGO_URI = (HINT_MONGO_URI, "mongodb://host:27017/?authSource=admin", "mongodb://host:27017")
+_EXAMPLE_MONGO_DB = (HINT_MONGO_DB,)
+_EXAMPLE_MONGO_USER = (HINT_MONGO_USER, "user")
+_EXAMPLE_SQL_SERVER = (HINT_SQL_SERVER, r"srv\INSTANCE")
+_EXAMPLE_SQL_DB = (HINT_SQL_DB,)
+_EXAMPLE_SQL_SCHEMA = (HINT_SQL_SCHEMA,)
+_EXAMPLE_SQL_USER = (HINT_SQL_USER, "user")
+
+
+def _hint_field(saved: str | None, hint: str, examples: tuple[str, ...]) -> tuple[str, str]:
+    """Show saved text only when it is a real value; examples stay as placeholders."""
+    raw = (saved or "").strip()
+    if not raw or raw in examples:
+        return "", hint
+    return raw, hint
+
+
+def _or_saved(typed: str, saved: str | None) -> str:
+    return (typed or "").strip() or (saved or "")
+
+
+def _clear_example_widget(key: str, examples: tuple[str, ...]) -> None:
+    current = st.session_state.get(key)
+    if isinstance(current, str) and current.strip() in examples:
+        st.session_state[key] = ""
+
+
+def _hint_input(
+    label: str,
+    key: str,
+    saved: str | None,
+    hint: str,
+    examples: tuple[str, ...],
+    **kwargs,
+) -> str:
+    shown, placeholder = _hint_field(saved, hint, examples)
+    if key not in st.session_state:
+        st.session_state[key] = shown
+    else:
+        _clear_example_widget(key, examples)
+    return st.text_input(label, placeholder=placeholder, key=key, **kwargs)
+
 
 def _mark_saved(label: str) -> None:
     st.session_state[SAVE_FLASH] = label
@@ -86,21 +129,27 @@ def _mongo_card(settings: Settings) -> None:
         with st.form("mongo_conn"):
             left, right = st.columns(2)
             with left:
-                uri = st.text_input(
+                uri = _hint_input(
                     "Bağlantı URI",
-                    value=settings.mongo.get("uri") or "",
-                    placeholder=HINT_MONGO_URI,
+                    "mongo_uri",
+                    settings.mongo.get("uri"),
+                    HINT_MONGO_URI,
+                    _EXAMPLE_MONGO_URI,
                 )
-                database = st.text_input(
+                database = _hint_input(
                     "Veritabanı",
-                    value=settings.mongo.get("database") or "",
-                    placeholder=HINT_MONGO_DB,
+                    "mongo_db",
+                    settings.mongo.get("database"),
+                    HINT_MONGO_DB,
+                    _EXAMPLE_MONGO_DB,
                 )
             with right:
-                user = st.text_input(
+                user = _hint_input(
                     "Kullanıcı",
-                    value=settings.mongo.get("username") or "",
-                    placeholder=HINT_MONGO_USER,
+                    "mongo_user",
+                    settings.mongo.get("username"),
+                    HINT_MONGO_USER,
+                    _EXAMPLE_MONGO_USER,
                 )
                 password = st.text_input(
                     "Şifre",
@@ -122,14 +171,19 @@ def _mongo_card(settings: Settings) -> None:
 
         if do_test:
             _test_mongo(
-                mongo_cfg_from_form(uri, database, user, password or settings.mongo_password)
+                mongo_cfg_from_form(
+                    _or_saved(uri, settings.mongo.get("uri")),
+                    _or_saved(database, settings.mongo.get("database")),
+                    _or_saved(user, settings.mongo.get("username")),
+                    password or settings.mongo_password,
+                )
             )
         if do_save:
             save_connection_overrides(
                 mongodb={
-                    "uri": uri,
-                    "database": database,
-                    "username": user,
+                    "uri": _or_saved(uri, settings.mongo.get("uri")),
+                    "database": _or_saved(database, settings.mongo.get("database")),
+                    "username": _or_saved(user, settings.mongo.get("username")),
                     "password": password or None,
                 },
                 mssql={},
@@ -154,29 +208,37 @@ def _sql_card(settings: Settings) -> None:
         left, right = st.columns(2)
         with left:
             st.markdown("**Yazılacak yer**")
-            server = st.text_input(
+            server = _hint_input(
                 "Sunucu",
-                value=settings.mssql.get("server") or "",
-                placeholder=HINT_SQL_SERVER,
+                "sql_server",
+                settings.mssql.get("server"),
+                HINT_SQL_SERVER,
+                _EXAMPLE_SQL_SERVER,
             )
-            database = st.text_input(
+            database = _hint_input(
                 "Veritabanı",
-                value=settings.mssql.get("database") or "",
-                placeholder=HINT_SQL_DB,
+                "sql_db",
+                settings.mssql.get("database"),
+                HINT_SQL_DB,
+                _EXAMPLE_SQL_DB,
             )
-            schema = st.text_input(
+            schema = _hint_input(
                 "Şema",
-                value=settings.mssql.get("schema") or "",
-                placeholder=HINT_SQL_SCHEMA,
+                "sql_schema",
+                settings.mssql.get("schema"),
+                HINT_SQL_SCHEMA,
+                _EXAMPLE_SQL_SCHEMA,
             )
         with right:
             st.markdown("**Kimlik doğrulama**")
             drivers = available_drivers()
-            current = settings.mssql.get("driver") or drivers[0]
+            current = settings.mssql.get("driver") or "ODBC Driver 17 for SQL Server"
+            if current not in drivers:
+                drivers = [current, *drivers]
             driver = st.selectbox(
                 "ODBC sürücü",
                 drivers,
-                index=drivers.index(current) if current in drivers else 0,
+                index=drivers.index(current),
             )
             auth = st.radio(
                 "Yöntem",
@@ -185,10 +247,12 @@ def _sql_card(settings: Settings) -> None:
                 key="sql_auth",
             )
             windows = auth == "Windows"
-            user = st.text_input(
+            user = _hint_input(
                 "Kullanıcı",
-                value=settings.mssql.get("username") or "",
-                placeholder=HINT_SQL_USER,
+                "sql_user",
+                None if windows else settings.mssql.get("username"),
+                HINT_SQL_USER,
+                _EXAMPLE_SQL_USER,
                 disabled=windows,
             )
             password = st.text_input(
@@ -216,26 +280,26 @@ def _sql_card(settings: Settings) -> None:
             _test_sql(
                 sql_target(
                     {
-                        "server": server,
-                        "database": database,
-                        "schema": schema,
+                        "server": _or_saved(server, settings.mssql.get("server")),
+                        "database": _or_saved(database, settings.mssql.get("database")),
+                        "schema": _or_saved(schema, settings.mssql.get("schema")),
                         "driver": driver,
                         "trusted_connection": windows,
-                        "username": "" if windows else user,
+                        "username": "" if windows else _or_saved(user, settings.mssql.get("username")),
                     },
                     None if windows else (password or settings.mssql_password),
                 )
             )
         if do_save:
             payload: dict = {
-                "server": server,
-                "database": database,
-                "schema": schema,
+                "server": _or_saved(server, settings.mssql.get("server")),
+                "database": _or_saved(database, settings.mssql.get("database")),
+                "schema": _or_saved(schema, settings.mssql.get("schema")),
                 "driver": driver,
                 "trusted_connection": windows,
             }
             if not windows:
-                payload["username"] = user
+                payload["username"] = _or_saved(user, settings.mssql.get("username"))
                 payload["password"] = password or None
             save_connection_overrides(mongodb={}, mssql=payload)
             _mark_saved("SQL Server")

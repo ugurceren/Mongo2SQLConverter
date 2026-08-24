@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterator, Sequence
 from bson import Binary, Decimal128, ObjectId, json_util
 
 from core.inspect import ddl_statements, key_column_type, sql_ident
-from core.mongo import MongoClientWrapper, encode_mongo_id
+from core.mongo import MongoClientWrapper, encode_mongo_id, encode_resume_id
 from core.mssql import MssqlConnection
 from core.textutil import clip_utf16, utf16_len
 
@@ -63,6 +63,31 @@ def retarget_plan(
 
 def plan_tables(plan: dict[str, Any]) -> list[str]:
     return [plan["root"]["table"], *(child["table"] for child in plan["children"])]
+
+
+def watermark_from_sql_value(value: Any) -> dict[str, str] | None:
+    encoded = encode_resume_id(value)
+    if not encoded:
+        return None
+    last_id, last_id_type = encoded
+    return {
+        "last_id": last_id,
+        "last_id_type": last_id_type,
+        "updated": "",
+        "source": "sql",
+    }
+
+
+def read_root_watermark(
+    target: MssqlConnection, schema: str, table: str
+) -> tuple[bool, dict[str, str] | None]:
+    """If the root table exists, return (True, last mongo_id watermark or None if empty)."""
+    exists, value = target.max_key(schema, table, "mongo_id")
+    if not exists:
+        return False, None
+    if value is None:
+        return True, None
+    return True, watermark_from_sql_value(value)
 
 
 def _narrow_sql_type(sql_type: str, live_width: int | None) -> str:

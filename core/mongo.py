@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 from bson import ObjectId
@@ -126,6 +127,30 @@ def encode_mongo_id(value: Any) -> tuple[str, str] | None:
     if isinstance(value, int):
         return str(value), "int"
     return str(value), "str"
+
+
+def encode_resume_id(value: Any) -> tuple[str, str] | None:
+    """Serialize a Mongo `_id` or a `mongo_id` value read back from SQL."""
+    if value is None:
+        return None
+    encoded = encode_mongo_id(value)
+    if encoded and encoded[1] != "str":
+        return encoded
+    if isinstance(value, Decimal):
+        try:
+            as_int = int(value)
+            if Decimal(as_int) == value:
+                return str(as_int), "int"
+        except (ValueError, OverflowError, InvalidOperation):
+            pass
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if len(raw) == 24 and ObjectId.is_valid(raw):
+        return raw, "objectid"
+    if raw.isdigit() or (raw[0] == "-" and raw[1:].isdigit()):
+        return raw, "int"
+    return raw, "str"
 
 
 def decode_mongo_id(raw: str, kind: str) -> Any:

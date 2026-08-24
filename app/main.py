@@ -21,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 theme.inject_css()
-theme.theme_toggle()
+theme.theme_toggle()  # top bar: brand + sidebar toggle aligned to sidebar edge
 
 SETTINGS: Settings = load_state()
 
@@ -85,19 +85,38 @@ theme.register_pages(
     }
 )
 
+_NAV_KEY = {
+    "connections": "nav_conn",
+    "discovery": "nav_schema",
+    "transfer": "nav_sql",
+}
+
+
+def _current_nav_key(page: object) -> str:
+    path = (getattr(page, "url_path", None) or "").strip("/")
+    if path in _NAV_KEY:
+        return _NAV_KEY[path]
+    title = getattr(page, "title", "") or ""
+    if title == "Şema keşfi":
+        return "nav_schema"
+    if title == "SQL aktarımı":
+        return "nav_sql"
+    return "nav_conn"
+
+
 navigation = st.navigation(
     [page_links, page_schema, page_sql],
     position="hidden",
 )
 
 with st.sidebar:
-    theme.brand()
     theme.nav_menu(
         [
             ("nav_conn", page_links, ":material/settings_ethernet:", "Bağlantılar"),
             ("nav_schema", page_schema, ":material/schema:", "Şema keşfi"),
             ("nav_sql", page_sql, ":material/moving:", "SQL aktarımı"),
-        ]
+        ],
+        current_key=_current_nav_key(navigation),
     )
     _sidebar_status(SETTINGS)
 

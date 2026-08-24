@@ -10,10 +10,12 @@ from app.ui.services import (
     apply_remembered_collection,
     collection_count_caption,
     collection_list,
+    invalidate_sql_watermarks,
     mongo_client,
     nesting_card,
     profile_one,
     remember_collection,
+    sql_table_watermark,
     sql_target,
 )
 from core.inspect import nesting_labels, render_database_ddl, sql_ident
@@ -22,6 +24,7 @@ from core.settings import load_sync_watermark, save_sync_watermark
 from core.transfer import (
     ensure_tables,
     plan_tables,
+    read_root_watermark,
     relax_nullability,
     retarget_plan,
     transfer_collection,
@@ -103,20 +106,31 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             ("Tam senkron", "Artımlı"),
             horizontal=True,
             key="tr_sync_kind",
-            help="Tam: tüm belgeler. Artımlı: son kaydedilen `_id` sonrası yeni kayıtlar.",
+            help="Tam: tüm belgeler. Artımlı: SQL tablosundaki son `_id` sonrası yeni kayıtlar.",
         )
         incremental = mode == "Artımlı"
-        watermark = load_sync_watermark(collection)
-
+        watermark = None
+        watermark_source = None
         if incremental:
+            sql_status, sql_mark = sql_table_watermark(
+                settings, options["schema"], options["table"]
+            )
+            if sql_status == "sql":
+                watermark = sql_mark
+                watermark_source = "sql" if sql_mark else None
+            else:
+                watermark = load_sync_watermark(collection)
+                watermark_source = "file" if watermark else None
+
             if watermark:
+                where = "SQL tablosu" if watermark_source == "sql" else "kayıtlı işaret"
                 st.caption(
-                    f"Son işaret · `_id` > `{watermark['last_id']}`"
+                    f"Son işaret · {where} · `_id` > `{watermark['last_id']}`"
                     + (f" · {watermark['updated']}" if watermark.get("updated") else "")
                 )
             else:
                 st.warning(
-                    "Bu koleksiyon için işaret yok. Önce **Tam senkron** çalıştırın, "
+                    "Bu koleksiyon için SQL tablosunda kayıt yok. Önce **Tam senkron** çalıştırın, "
                     "ya da artımlı ilk seferde tüm belgeleri okur."
                 )
         else:
@@ -237,12 +251,20 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
     try:
         target.connect()
         created, existing = ensure_tables(target, plan, recreate=options["recreate"])
+        invalidate_sql_watermarks()
         if created:
             st.success("Oluşturulan tablolar: " + ", ".join(created))
         if existing:
             st.caption("Zaten mevcut: " + ", ".join(existing))
         if not write:
             return
+
+        if options["mode"] == "incremental":
+            exists, sql_mark = read_root_watermark(
+                target, options["schema"], plan["root"]["table"]
+            )
+            if exists:
+                options["watermark"] = sql_mark
 
         query = _write_query(options)
         status = st.empty()
@@ -276,6 +298,7 @@ def _run(settings: Settings, options: dict, create: bool, write: bool) -> None:
 
         if stats.last_id and stats.last_id_type:
             save_sync_watermark(options["collection"], stats.last_id, stats.last_id_type)
+            invalidate_sql_watermarks()
 
         with st.container(border=True):
             theme.card_title("Sonuç", f"{options['collection']} → {options['schema']}")
@@ -309,8 +332,8 @@ def render(settings: Settings) -> None:
     theme.page_header(
         "Aktarım",
         "SQL aktarımı",
-        "Tam senkron tüm koleksiyonu yazar. Artımlı, son `_id` işaretinden "
-        "sonraki yeni belgeleri ekler; eski kayıtlardaki güncelleme için tam senkron gerekir.",
+        "Tam senkron tüm koleksiyonu yazar. Artımlı, SQL tablosundaki son `_id` "
+        "sonrası yeni belgeleri ekler; eski kayıtlardaki güncelleme için tam senkron gerekir.",
         step="transfer",
     )
 

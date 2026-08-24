@@ -101,6 +101,48 @@ def sql_target(
     )
 
 
+SQL_WATERMARK_KEY = "sql_watermarks"
+
+
+def invalidate_sql_watermarks() -> None:
+    st.session_state.pop(SQL_WATERMARK_KEY, None)
+
+
+def sql_table_watermark(
+    settings: Settings, schema: str, table: str
+) -> tuple[str, dict[str, str] | None]:
+    """
+    Last `mongo_id` in the SQL root table.
+
+    Returns (status, watermark):
+    - "sql": table exists (watermark is None when the table is empty)
+    - "missing": table or SQL connection is not available
+    """
+    if not settings.sql_ready or not schema or not table:
+        return "missing", None
+    cache = st.session_state.setdefault(SQL_WATERMARK_KEY, {})
+    key = (
+        f"{settings.mssql.get('server')}|{settings.mssql.get('database')}|"
+        f"{schema}|{table}"
+    )
+    if key in cache:
+        return cache[key]
+    from core.transfer import read_root_watermark
+
+    target = sql_target(settings.mssql, settings.mssql_password, schema)
+    try:
+        with st.spinner("SQL tablosundaki son id okunuyor..."):
+            target.connect()
+            exists, watermark = read_root_watermark(target, schema, table)
+    except Exception:
+        return "missing", None
+    finally:
+        target.close()
+    status = "sql" if exists else "missing"
+    cache[key] = (status, watermark)
+    return status, watermark
+
+
 def mongo_cfg_from_form(uri: str, database: str, user: str, password: str | None) -> dict[str, Any]:
     return {
         "uri": uri,

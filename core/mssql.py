@@ -120,6 +120,23 @@ class MssqlConnection:
         )
         return cur.fetchone() is not None
 
+    def max_key(
+        self, schema: str, table: str, column: str = "mongo_id"
+    ) -> tuple[bool, Any]:
+        """Return (table_exists, MAX(column)). Value is None when empty or column missing."""
+        if not self.table_exists(schema, table):
+            return False, None
+        cur = self.conn.cursor()
+        try:
+            cur.execute(f"SELECT MAX([{column}]) FROM [{schema}].[{table}]")
+        except Exception:
+            self.rollback()
+            return True, None
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return True, None
+        return True, row[0]
+
     def drop_table(self, schema: str, table: str) -> None:
         cur = self.conn.cursor()
         cur.execute(f"IF OBJECT_ID(N'[{schema}].[{table}]', N'U') IS NOT NULL DROP TABLE [{schema}].[{table}]")
@@ -183,9 +200,21 @@ class MssqlConnection:
             self._conn.rollback()
 
 
+KNOWN_SQL_DRIVERS = (
+    "ODBC Driver 17 for SQL Server",
+    "ODBC Driver 18 for SQL Server",
+    "SQL Server",
+)
+
+
 def available_drivers() -> list[str]:
+    found: list[str] = []
     try:
         found = [d for d in pyodbc.drivers() if "SQL Server" in d]
-        return found or ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"]
     except Exception:
-        return ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"]
+        found = []
+    ordered: list[str] = []
+    for name in (*KNOWN_SQL_DRIVERS, *found):
+        if name not in ordered:
+            ordered.append(name)
+    return ordered
