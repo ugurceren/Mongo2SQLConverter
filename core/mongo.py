@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
@@ -81,6 +82,18 @@ class MongoClientWrapper:
             return int(col.estimated_document_count())
         except Exception:
             return int(col.count_documents({}))
+
+    def has_index_on(self, collection: str, field: str) -> bool:
+        """True when an index starts with `field`, so a range scan can use it."""
+        try:
+            info = self.collection(collection).index_information()
+        except Exception:
+            return False
+        for spec in info.values():
+            keys = spec.get("key") or []
+            if keys and keys[0][0] == field:
+                return True
+        return False
 
     def iter_documents(
         self,
@@ -163,3 +176,31 @@ def decode_mongo_id(raw: str, kind: str) -> Any:
 
 def id_after_filter(last_id: Any) -> dict[str, Any]:
     return {"_id": {"$gt": last_id}}
+
+
+def date_range_filter(
+    field: str, start: datetime | None, end: datetime | None
+) -> dict[str, Any]:
+    """Range filter on a date field: `start` inclusive, `end` exclusive.
+
+    The caller passes the day after the last wanted day as `end`, so a picked
+    range covers whole days without needing an end-of-day timestamp.
+    """
+    if not field:
+        return {}
+    bounds: dict[str, Any] = {}
+    if start is not None:
+        bounds["$gte"] = start
+    if end is not None:
+        bounds["$lt"] = end
+    return {field: bounds} if bounds else {}
+
+
+def combine_filters(*filters: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Join filters with `$and`; empty ones drop out, a single one stays plain."""
+    parts = [f for f in filters if f]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return {"$and": parts}

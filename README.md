@@ -41,6 +41,24 @@ python tools/infer_schema.py --collection conversations --sample 5000 --out-ddl 
 python tools/infer_schema.py --from-file export.json --collection mycol --out-drdl out.drdl
 ```
 
+## Aktarimi daraltma
+
+**SQL aktarimi** sayfasinda koleksiyonun tamamini yazmak zorunlu degil.
+
+**Tarih araligi:** Profilleme sirasinda bulunan tarih tipli alanlar (`createdAt`, `updatedAt` gibi) listelenir; birini secip baslangic ve bitis gunu verirsiniz. Bitis gunu dahildir. Gunler "Yerel saat" ya da "UTC" olarak yorumlanir ve Mongo'ya UTC olarak gider. Secilen alanda index yoksa uyari cikar; hizlandirmak icin:
+
+```javascript
+db.conversations.createIndex({ createdAt: 1 })
+```
+
+Aralik yalnizca yazmayi degil profillemeyi de daraltir, boylece kolon genisliklerini o donemin verisi belirler. Dizi elemani icindeki tarihlere gore filtreleme desteklenmez.
+
+**Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden geldigi icin once **Kolonlari getir** (ya da **Plani hazirla**) gerekir.
+
+Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir.
+
+**Dikkat:** Artimli senkron ile tarih araligini birlikte kullanirken belgeler `_id` sirasiyla okunur ve isaret yalnizca filtreden gecen son belgeye ilerler; aralik disinda kalan daha buyuk `_id`'ler sonraki kosularda bir daha okunmaz. Donem bazli yukleme icin tam senkron daha guvenlidir.
+
 ## Yapi
 
 - `core/inspect.py` — sema profilleme, DRDL/DDL

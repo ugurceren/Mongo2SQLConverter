@@ -195,6 +195,8 @@ def collection_list(settings: Settings) -> tuple[list[str], str | None, str | No
 def invalidate_collections() -> None:
     st.session_state.pop(COLLECTIONS_KEY, None)
     st.session_state.pop(COUNTS_KEY, None)
+    st.session_state.pop(PLAN_CACHE_KEY, None)
+    st.session_state.pop("field_indexes", None)
 
 
 COUNTS_KEY = "collection_counts"
@@ -410,7 +412,12 @@ def profile_many(
 
 
 def profile_one(
-    settings: Settings, name: str, sample: int, schema: str, nesting: str = "deep"
+    settings: Settings,
+    name: str,
+    sample: int,
+    schema: str,
+    nesting: str = "deep",
+    query: dict[str, Any] | None = None,
 ) -> dict:
     mongo = mongo_client(settings.mongo)
     try:
@@ -425,7 +432,122 @@ def profile_one(
                 settings.map_max_fill,
                 settings.headroom,
                 nesting=nesting,
+                query=query,
             )
     finally:
         mongo.close()
     return plan
+
+
+PLAN_CACHE_KEY = "plan_cache"
+
+
+def plan_signature(options: dict[str, Any], query: dict[str, Any] | None) -> str:
+    """Everything that changes the profiled plan; the column picker is not part of it."""
+    return "|".join(
+        str(part)
+        for part in (
+            options.get("collection"),
+            options.get("schema"),
+            options.get("table"),
+            options.get("nesting"),
+            options.get("sample"),
+            options.get("allow_null"),
+            repr(query),
+        )
+    )
+
+
+def cached_plan(
+    settings: Settings,
+    options: dict[str, Any],
+    query: dict[str, Any] | None = None,
+    force: bool = False,
+) -> dict | None:
+    """
+    Profiled plan for the current options, kept for this session.
+
+    The column picker and the write must agree on one plan, and repeated button
+    presses should not re-profile the collection. Column exclusions are applied
+    on top of this plan by the caller, so they never invalidate the cache.
+    """
+    from core.transfer import relax_nullability, retarget_plan
+
+    if not options.get("collection") or not options.get("table"):
+        return None
+    cache = st.session_state.setdefault(PLAN_CACHE_KEY, {})
+    key = plan_signature(options, query)
+    if not force and key in cache:
+        return cache[key]
+
+    plan = profile_one(
+        settings,
+        options["collection"],
+        options["sample"],
+        options["schema"],
+        nesting=options["nesting"],
+        query=query,
+    )
+    plan = retarget_plan(plan, schema=options["schema"], root_table=options["table"])
+    if options.get("allow_null"):
+        plan = relax_nullability(plan)
+    cache[key] = plan
+    return plan
+
+
+def stored_plan(options: dict[str, Any], query: dict[str, Any] | None = None) -> dict | None:
+    """Already-profiled plan for these options, or None. Never reads Mongo."""
+    cache = st.session_state.get(PLAN_CACHE_KEY) or {}
+    return cache.get(plan_signature(options, query))
+
+
+def invalidate_plans() -> None:
+    st.session_state.pop(PLAN_CACHE_KEY, None)
+
+
+# --------------------------------------------------------------------------
+# date range helpers
+# --------------------------------------------------------------------------
+
+
+def date_field_options(settings: Settings, collection: str) -> list[dict[str, Any]]:
+    """Date-typed fields found by the cached shape peek; no extra Mongo read."""
+    shape = peek_shape(settings, collection)
+    if not shape:
+        return []
+    return list(shape.get("date_fields") or [])
+
+
+def field_has_index(settings: Settings, collection: str, field: str) -> bool | None:
+    """True/False when Mongo answered, None when the index list is unavailable."""
+    if not settings.mongo_ready or not collection or not field:
+        return None
+    cache = st.session_state.setdefault("field_indexes", {})
+    key = f"{collection}|{field}"
+    if key in cache:
+        return cache[key]
+    mongo = mongo_client(settings.mongo)
+    try:
+        mongo.connect()
+        cache[key] = mongo.has_index_on(collection, field)
+    except Exception:
+        return None
+    finally:
+        mongo.close()
+    return cache[key]
+
+
+def count_matching(
+    settings: Settings, collection: str, query: dict[str, Any] | None
+) -> int | None:
+    if not settings.mongo_ready or not collection:
+        return None
+    mongo = mongo_client(settings.mongo)
+    try:
+        mongo.connect()
+        with st.spinner("Kayıtlar sayılıyor..."):
+            return mongo.estimated_count(collection, query)
+    except Exception:
+        return None
+    finally:
+        mongo.close()

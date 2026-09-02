@@ -420,17 +420,32 @@ def describe_shape(profile: Profile) -> dict[str, Any]:
     nested_arrays: list[str] = []
     top_objects: list[str] = []
     nested_objects: list[str] = []
+    date_fields: list[dict[str, Any]] = []
     for stat in profile.stats.values():
         if stat.dominant_type == "array":
             (top_arrays if is_top_level(stat.path) else nested_arrays).append(stat.path)
         elif stat.dominant_type == "object" and profile.children_of(stat.path):
             (top_objects if is_top_level(stat.path) else nested_objects).append(stat.path)
+        elif stat.dominant_type == "date" and "[]" not in stat.path:
+            # Dates inside arrays would need $elemMatch semantics to filter on.
+            # A range filter only reaches documents that hold a real date, so
+            # nulls are left out of the count a caller ranks candidates by.
+            dated = stat.types.get("date", 0)
+            containers = profile.containers.get(stat.parent or "", 0)
+            date_fields.append(
+                {
+                    "path": stat.path,
+                    "fill": (dated / containers) if containers else None,
+                    "present": dated,
+                }
+            )
     return {
         "documents": profile.documents,
         "top_arrays": sorted(top_arrays),
         "nested_arrays": sorted(nested_arrays),
         "top_objects": sorted(top_objects),
         "nested_objects": sorted(nested_objects),
+        "date_fields": sorted(date_fields, key=lambda f: (-f["present"], f["path"])),
     }
 
 
@@ -1007,9 +1022,12 @@ def iter_from_file(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def iter_from_mongo(
-    source: MongoClientWrapper, collection: str, sample: int
+    source: MongoClientWrapper,
+    collection: str,
+    sample: int,
+    query: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    yield from source.iter_documents(collection, sample=sample)
+    yield from source.iter_documents(collection, sample=sample, query=query)
 
 
 def profile_collection(
@@ -1021,9 +1039,12 @@ def profile_collection(
     map_max_fill: float,
     headroom: float,
     nesting: str = NESTING_DEEP,
+    query: dict[str, Any] | None = None,
 ) -> tuple[Profile, dict[str, Any]]:
+    """Profile a collection; `query` narrows profiling to the documents that
+    will actually be written, so column widths match the transferred subset."""
     profile = Profile()
-    for doc in iter_from_mongo(source, collection, sample):
+    for doc in iter_from_mongo(source, collection, sample, query):
         profile.add_document(doc)
     maps = detect_map_prefixes(profile, map_min_keys, map_max_fill)
     return profile, build_plan(

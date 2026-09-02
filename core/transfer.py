@@ -161,6 +161,111 @@ def relax_nullability(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# column selection
+# --------------------------------------------------------------------------
+
+
+def apply_column_selection(
+    plan: dict[str, Any],
+    exclude_paths: Sequence[str] = (),
+    exclude_sources: Sequence[str] = (),
+) -> dict[str, Any]:
+    """
+    Drop unwanted columns and child tables from a plan.
+
+    The DDL, the flattener and the INSERT column lists all read the same plan,
+    so narrowing it here narrows table creation and writing together.
+
+    Selection is stored as exclusions rather than a whitelist: a field that
+    only shows up in a later profile stays included by default.
+
+    Keys are never dropped: the root `mongo_id`, each child's parent key and
+    the array ordinals carry the relationships the plan depends on. An array
+    child whose every column is excluded disappears entirely, and a map child
+    is all-or-nothing through `exclude_sources`.
+    """
+    excluded = set(exclude_paths)
+    excluded_sources = set(exclude_sources)
+    if not excluded and not excluded_sources:
+        return plan
+
+    out = dict(plan)
+    root = dict(plan["root"])
+    root["columns"] = [
+        column
+        for column in plan["root"]["columns"]
+        if column["name"] == "mongo_id" or column["path"] not in excluded
+    ]
+    out["root"] = root
+
+    children: list[dict[str, Any]] = []
+    for child in plan["children"]:
+        if child["source"] in excluded_sources:
+            continue
+        if child["kind"] == "map":
+            children.append(child)
+            continue
+        kept = [column for column in child["columns"] if column["path"] not in excluded]
+        if child["columns"] and not kept:
+            continue
+        children.append({**child, "columns": kept})
+    out["children"] = children
+    return out
+
+
+def plan_column_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    One row per selectable column, for the transfer page's picker.
+
+    Key columns are left out because they cannot be deselected. A map child
+    contributes a single row standing for its key/value pair.
+    """
+    rows: list[dict[str, Any]] = []
+    for column in plan["root"]["columns"]:
+        if column["name"] == "mongo_id":
+            continue
+        rows.append(
+            {
+                "table": plan["root"]["table"],
+                "kind": "root",
+                "source": "",
+                "name": column["name"],
+                "path": column["path"],
+                "sql_type": column["sql_type"],
+                "fill": column.get("fill"),
+            }
+        )
+
+    for child in plan["children"]:
+        if child["kind"] == "map":
+            rows.append(
+                {
+                    "table": child["table"],
+                    "kind": "map",
+                    "source": child["source"],
+                    "name": f"{child['key_column']['name']} + {child['value_column']['name']}",
+                    "path": child["source"],
+                    "sql_type": child["value_column"]["sql_type"],
+                    "fill": None,
+                }
+            )
+            continue
+        for column in child["columns"]:
+            rows.append(
+                {
+                    "table": child["table"],
+                    "kind": "array",
+                    "source": child["source"],
+                    "name": column["name"],
+                    "path": column["path"],
+                    "sql_type": column["sql_type"],
+                    "fill": column.get("fill"),
+                }
+            )
+    return rows
+
+
+# --------------------------------------------------------------------------
 # value conversion
 # --------------------------------------------------------------------------
 

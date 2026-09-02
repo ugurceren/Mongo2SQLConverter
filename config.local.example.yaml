@@ -10,3 +10,19 @@ mssql:
   schema: "dbo"
   trusted_connection: true
   driver: "ODBC Driver 17 for SQL Server"
+
+# SQL aktarimi sayfasindaki secimler koleksiyon basina buraya yazilir.
+# Arayuzden doldurulur; elle yazmak zorunlu degildir.
+transfer:
+  conversations:
+    date_filter:
+      enabled: true
+      field: "createdAt"     # tarih tipli bir alan
+      start: "2024-01-01"    # dahil
+      end: "2024-12-31"      # dahil
+      timezone: "local"      # local | utc
+    columns:
+      exclude:               # aktarilmayacak Mongo alan yollari
+        - "meta.raw"
+      exclude_tables:        # aktarilmayacak alt tablolarin kaynak yollari
+        - "tracker.slots"
