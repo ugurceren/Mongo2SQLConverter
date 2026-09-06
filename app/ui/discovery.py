@@ -181,12 +181,6 @@ def render(settings: Settings) -> None:
             f"<code>{name}</code> · "
             f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
         )
-        theme.page_cta(
-            "transfer",
-            "SQL aktarımına geç",
-            ":material/moving:",
-            "cta_to_transfer",
-        )
         if scope == "collection" and "ddl" in st.session_state and "plan" in st.session_state:
             drdl_tab, ddl_tab, plan_tab = st.tabs(["DRDL", "MSSQL DDL", "Plan"])
             with drdl_tab:
@@ -200,3 +194,9 @@ def render(settings: Settings) -> None:
         else:
             st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")
             st.code(st.session_state["drdl"], language="yaml")
+
+    theme.next_step(
+        "transfer",
+        "Çıkarılan şemayı SQL Server'a yazın: tablolar plana göre oluşur, "
+        "belgeler tam ya da artımlı olarak aktarılır.",
+    )

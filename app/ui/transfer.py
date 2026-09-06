@@ -15,6 +15,7 @@ from app.ui.services import (
     collection_count_caption,
     collection_list,
     count_matching,
+    date_field_bounds,
     date_field_options,
     field_has_index,
     format_int,
@@ -45,6 +46,8 @@ from core.transfer import (
 )
 
 PLAN_KEY = "transfer_plan"
+RUN_REQUEST_KEY = "tr_run_request"
+RUN_DONE_KEY = "tr_run_done"
 PREFS_KEY = "tr_prefs"
 PREFS_STAMP = "tr_prefs_collection"
 SAVED_PREFS_KEY = "tr_prefs_saved"
@@ -112,6 +115,10 @@ def _remember_prefs(collection: str | None, options: dict) -> None:
 # --------------------------------------------------------------------------
 
 
+def _filter_tz(mode: str):
+    return timezone.utc if mode == "utc" else datetime.now().astimezone().tzinfo
+
+
 def _utc_bounds(
     start: date | None, end: date | None, mode: str
 ) -> tuple[datetime | None, datetime | None]:
@@ -121,12 +128,20 @@ def _utc_bounds(
     `end` is the last wanted day, so the upper bound is the following midnight.
     Bounds are timezone aware, which lets pymongo store them as UTC.
     """
-    zone = timezone.utc if mode == "utc" else datetime.now().astimezone().tzinfo
+    zone = _filter_tz(mode)
     lower = datetime.combine(start, time.min, tzinfo=zone) if start else None
     upper = (
         datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone) if end else None
     )
     return lower, upper
+
+
+def _as_calendar_date(value: datetime | None, mode: str) -> date | None:
+    """Convert a Mongo datetime to the calendar day in the transfer timezone."""
+    if value is None or not isinstance(value, datetime):
+        return None
+    instant = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return instant.astimezone(_filter_tz(mode)).date()
 
 
 def _date_query(date_filter: dict[str, Any]) -> dict[str, Any] | None:
@@ -199,19 +214,34 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
                     "tarih olduğunu gösterir. Alanı boş olan belgeler aralığa girmez."
                 ),
             )
+
+        zone_key = f"tr_date_tz_{collection}"
+        zone_now = st.session_state.get(zone_key) or saved.get("timezone") or "local"
+        if zone_now not in ("local", "utc"):
+            zone_now = "local"
+        lo_dt, hi_dt = date_field_bounds(settings, collection, field)
+        lo_date = _as_calendar_date(lo_dt, zone_now)
+        hi_date = _as_calendar_date(hi_dt, zone_now)
+
+        start_key = f"tr_date_start_{collection}"
+        end_key = f"tr_date_end_{collection}"
+        seed_key = f"tr_date_seed_{collection}"
+        if st.session_state.get(seed_key) != field:
+            st.session_state[start_key] = lo_date or date.today().replace(month=1, day=1)
+            st.session_state[end_key] = hi_date or date.today()
+            st.session_state[seed_key] = field
+
         with row[1]:
             start = st.date_input(
                 "Başlangıç",
-                value=saved["start"] or date.today().replace(month=1, day=1),
                 format="DD.MM.YYYY",
-                key=f"tr_date_start_{collection}",
+                key=start_key,
             )
         with row[2]:
             end = st.date_input(
                 "Bitiş",
-                value=saved["end"] or date.today(),
                 format="DD.MM.YYYY",
-                key=f"tr_date_end_{collection}",
+                key=end_key,
                 help="Bitiş günü dahildir.",
             )
         with row[3]:
@@ -241,6 +271,12 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
         st.caption(
             f"Filtre · `{field}` >= `{lower:%Y-%m-%d %H:%M %Z}` ve < `{upper:%Y-%m-%d %H:%M %Z}`"
         )
+        if lo_date and hi_date:
+            st.caption(f"Verideki aralık · `{field}` {lo_date:%d.%m.%Y}–{hi_date:%d.%m.%Y}")
+        else:
+            st.caption(
+                f"`{field}` için min/max okunamadı; kutular takvim varsayılanıyla doldu."
+            )
 
         chosen = next((item for item in candidates if item["path"] == field), None)
         if chosen and chosen["fill"] is not None and chosen["fill"] < 0.99:
@@ -307,8 +343,8 @@ def _columns_card(
     """
     Pick which columns and child tables to write.
 
-    Returns (profiled plan, exclusions). The plan is None until a profile
-    exists, because listing columns requires reading the collection first.
+    Returns (profiled plan, exclusions). The plan is None when the collection
+    could not be profiled, because listing columns requires reading it first.
     """
     collection = options["collection"]
     state = _exclusions(collection, _prefs(collection))
@@ -318,12 +354,9 @@ def _columns_card(
         theme.card_title("Kolonlar", "Aktarılacak kolonları ve alt tabloları seçin.")
         if plan is None:
             st.caption(
-                "Kolon listesi koleksiyonun profilinden gelir. Profil ayarları yukarıda; "
-                "listeyi getirmek koleksiyonu okur."
+                "Kolon listesi koleksiyonun profilinden gelir. Profil alınamadı: "
+                "kök tablo adını ve Mongo bağlantısını kontrol edin."
             )
-            if st.button("Kolonları getir", key=f"tr_cols_fetch_{collection}"):
-                cached_plan(settings, options, query)
-                st.rerun()
             if state["exclude"] or state["exclude_tables"]:
                 st.caption(
                     f"Kayıtlı seçim: {len(state['exclude'])} kolon, "
@@ -631,6 +664,40 @@ def _build_plan(settings: Settings, options: dict) -> dict:
     return apply_column_selection(plan, columns["exclude"], columns["exclude_tables"])
 
 
+def _run_signature(options: dict) -> str:
+    """
+    Everything a run depends on, so a finished run can stay finished.
+
+    The watermark is left out: an incremental pass advances it, and that alone
+    should not turn the button back on.
+    """
+    columns = options.get("columns") or {}
+    return "|".join(
+        str(part)
+        for part in (
+            options.get("collection"),
+            options.get("schema"),
+            options.get("table"),
+            options.get("nesting"),
+            options.get("sample"),
+            options.get("batch"),
+            options.get("mode"),
+            options.get("recreate"),
+            options.get("clear_first"),
+            options.get("allow_null"),
+            repr(options.get("date_filter")),
+            repr(sorted(columns.get("exclude") or [])),
+            repr(sorted(columns.get("exclude_tables") or [])),
+        )
+    )
+
+
+def _request_run() -> None:
+    """Claim the next rerun for a write, so the button renders disabled while it runs."""
+    st.session_state[RUN_REQUEST_KEY] = True
+    st.session_state.pop(RUN_DONE_KEY, None)
+
+
 def _write_query(options: dict) -> dict | None:
     """Mongo filter for the write pass: date range, `_id` watermark, or both."""
     dates = _date_query(options["date_filter"])
@@ -669,7 +736,7 @@ def _plan_summary(settings: Settings, plan: dict, options: dict) -> None:
         st.code("\n".join(tables), language="text")
 
 
-def _run(settings: Settings, options: dict, write: bool) -> None:
+def _run(settings: Settings, options: dict) -> None:
     plan = _build_plan(settings, options)
     st.session_state[PLAN_KEY] = plan
     _plan_summary(settings, plan, options)
@@ -685,8 +752,6 @@ def _run(settings: Settings, options: dict, write: bool) -> None:
             st.success("Oluşturulan tablolar: " + ", ".join(created))
         if existing:
             st.caption("Zaten mevcut: " + ", ".join(existing))
-        if not write:
-            return
 
         if options["mode"] == "incremental":
             exists, sql_mark = read_root_watermark(
@@ -777,12 +842,24 @@ def render(settings: Settings) -> None:
     blockers = []
     if not settings.mongo_ready:
         blockers.append("Mongo bağlantısı")
-    if not settings.sql_ready:
+    if settings.sql_needs_password:
+        blockers.append("SQL şifresi")
+    elif not settings.sql_ready:
         blockers.append("SQL bağlantısı")
     if blockers:
         theme.need_connections(blockers)
 
     options = _target_card(settings, collections)
+
+    # The plan follows the selections above on its own: profiling is cached per
+    # option set, so a rerun that changes nothing does not re-read Mongo.
+    plan = None
+    if options["collection"] and options["table"] and settings.mongo_ready:
+        try:
+            plan = cached_plan(settings, options, _date_query(options["date_filter"]))
+        except Exception as exc:
+            st.error(f"Koleksiyon profillenemedi: {exc}")
+
     if options["collection"]:
         st.write("")
         _, options["columns"] = _columns_card(
@@ -790,51 +867,63 @@ def render(settings: Settings) -> None:
         )
         _remember_prefs(options["collection"], options)
 
-    ready = bool(
-        settings.mongo_ready and settings.sql_ready and options["collection"] and options["table"]
-    )
+    selected = None
+    if plan is not None:
+        selected = apply_column_selection(
+            plan, options["columns"]["exclude"], options["columns"]["exclude_tables"]
+        )
+        st.session_state[PLAN_KEY] = selected
+    else:
+        st.session_state.pop(PLAN_KEY, None)
+
+    ready = bool(settings.sql_ready and selected is not None)
+    signature = _run_signature(options)
+    busy = bool(st.session_state.get(RUN_REQUEST_KEY))
+    finished = st.session_state.get(RUN_DONE_KEY) == signature
     write_label = "Artımlı senkron" if options["mode"] == "incremental" else "Tam senkron"
 
     if options["collection"]:
         st.write("")
-        actions = st.columns([1.3, 1.3, 1.3, 2.1])
+        actions = st.columns([1.6, 1.6, 2.8], vertical_alignment="bottom")
         with actions[0]:
-            do_plan = st.button("Planı hazırla", key="tr_do_plan", width="stretch")
-        with actions[1]:
-            do_create = st.button(
-                "Tabloları oluştur",
-                key="tr_do_create",
-                disabled=not ready or options["mode"] == "incremental",
-                width="stretch",
-            )
-        with actions[2]:
-            do_write = st.button(
+            st.button(
                 write_label,
                 key="tr_do_write",
                 type="primary",
-                disabled=not ready,
+                disabled=not ready or busy or finished,
+                on_click=_request_run,
                 width="stretch",
+                help="Eksik tabloları oluşturur, sonra belgeleri yazar.",
             )
-    else:
-        do_plan = do_create = do_write = False
+        with actions[1]:
+            if finished:
+                st.button(
+                    "Yeniden çalıştır",
+                    key="tr_do_again",
+                    on_click=_request_run,
+                    width="stretch",
+                )
+        with actions[2]:
+            if busy:
+                st.caption("Aktarım sürüyor...")
+            elif finished:
+                st.caption("Bu ayarlarla aktarım tamamlandı. Bir ayarı değiştirin ya da yeniden çalıştırın.")
+            elif not ready:
+                st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
 
-    if do_create or do_write:
+    if busy:
         st.write("")
         try:
-            _run(settings, options, write=do_write)
-        except Exception as exc:
-            st.error(str(exc))
-    elif do_plan:
-        # Rerun so the column picker above can list this plan's columns.
-        try:
-            st.session_state[PLAN_KEY] = _build_plan(settings, options)
+            _run(settings, options)
         except Exception as exc:
             st.error(str(exc))
         else:
-            st.rerun()
-    elif PLAN_KEY in st.session_state:
+            st.session_state[RUN_DONE_KEY] = signature
+        finally:
+            st.session_state.pop(RUN_REQUEST_KEY, None)
+    elif selected is not None:
         st.write("")
-        _plan_summary(settings, st.session_state[PLAN_KEY], options)
+        _plan_summary(settings, selected, options)
 
     if PLAN_KEY in st.session_state:
         with st.expander("Üretilen DDL", expanded=False):

@@ -19,8 +19,11 @@ MSSQL_KEYS = (
     "schema",
     "driver",
     "trusted_connection",
+    "auth",
     "username",
     "password",
+    "encrypt",
+    "trust_certificate",
 )
 
 

@@ -8,8 +8,15 @@ mssql:
   server: "srv\\INSTANCE"
   database: "MyWarehouse"
   schema: "dbo"
-  trusted_connection: true
   driver: "ODBC Driver 17 for SQL Server"
+  # windows      -> uygulamayi calistiran Windows hesabi
+  # sql          -> SQL Server login'i (username + password)
+  # windows_user -> girilen domain hesabi taklit edilir (pywin32 gerekir)
+  auth: "windows"
+  username: ""           # windows disindaki modlarda dolu olur
+  password: ""           # bos ise arayuzde "sakla" kapali demektir
+  encrypt: "default"     # default | yes | no
+  trust_certificate: false
 
 # SQL aktarimi sayfasindaki secimler koleksiyon basina buraya yazilir.
 # Arayuzden doldurulur; elle yazmak zorunlu degildir.

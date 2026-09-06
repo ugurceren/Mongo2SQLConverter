@@ -25,6 +25,32 @@ copy config.local.example.yaml config.local.yaml
 
 Ornek dosyada `mydb`, `user`, `srv\INSTANCE` gibi yer tutucular vardir; gercek sifre ve sunucu adini kendiniz yazin.
 
+## SQL kimlik dogrulama
+
+**Baglantilar** sayfasindaki **Yontem** listesi, yazma yetkisi olan hesabi secmenizi saglar:
+
+| Yontem | Nasil baglanir | Kullanici alani |
+|--------|----------------|-----------------|
+| Windows — bu oturum | `Trusted_Connection=yes`, uygulamayi calistiran hesap | gerekmez |
+| SQL Server hesabi | `UID` + `PWD` | login adi (domain oneki yazmayin) |
+| Windows — baska hesap | Girilen domain hesabi baglanti aninda taklit edilir | `DOMAIN\hesap` |
+
+**Windows — baska hesap** modu `pywin32` ister (`requirements.txt` icinde). ODBC domain kullanici/sifresini baglanti dizesinde tasiyamadigi icin hesap `LogonUser` ile taklit edilir; sadece baglanti kurulurken gecerlidir.
+
+**Sifreleme:** Driver 18 varsayilan olarak sifreler ve sertifikayi dogrular; kurum CA'si yoksa "sertifika zinciri" hatasi verir. **Sunucu sertifikasina dogrulamadan guven** kutusu (`TrustServerCertificate=yes`) ya da Driver 17 bunu cozer.
+
+**Sifre saklama:** "Sifreyi bu makinede sakla" kapatilirsa sifre `config.local.yaml`'a yazilmaz, yalnizca acik oturumda tutulur. Domain hesaplari icin kapali tutmak onerilir.
+
+**Baglantiyi dene** yalnizca baglanmakla kalmaz; oturum adini, rolleri ve aktarimin ihtiyac duydugu yetkileri (tablo olusturma, hedef semaya yazma) raporlar. Eksik yetki varsa hangi rolun gerektigini soyler:
+
+```sql
+ALTER ROLE db_datareader ADD MEMBER [svc_mongo2sql];
+ALTER ROLE db_datawriter ADD MEMBER [svc_mongo2sql];
+ALTER ROLE db_ddladmin   ADD MEMBER [svc_mongo2sql];
+```
+
+`db_ddladmin` yalnizca tablolari uygulama olusturacaksa gerekir.
+
 ## Kullanim
 
 **Streamlit:**
@@ -53,7 +79,7 @@ db.conversations.createIndex({ createdAt: 1 })
 
 Aralik yalnizca yazmayi degil profillemeyi de daraltir, boylece kolon genisliklerini o donemin verisi belirler. Dizi elemani icindeki tarihlere gore filtreleme desteklenmez.
 
-**Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden geldigi icin once **Kolonlari getir** (ya da **Plani hazirla**) gerekir.
+**Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden gelir; koleksiyon ve kok tablo secildigi anda profil otomatik cikarilir.
 
 Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir.
 

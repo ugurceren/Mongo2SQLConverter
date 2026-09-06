@@ -2,3 +2,5 @@ pymongo>=4.6,<5
 pyodbc>=5.0
 PyYAML>=6.0
 streamlit>=1.32
+# "Windows - baska hesap" SQL modu domain hesabini taklit etmek icin kullanir.
+pywin32>=306; sys_platform == "win32"

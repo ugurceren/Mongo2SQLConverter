@@ -331,32 +331,140 @@ section[data-testid="stMain"] .block-container {
     flex: 1; height: 1px; background: var(--m2s-border); min-width: 0.8rem;
 }
 
-.st-key-cta_conn, .st-key-cta_disc, .st-key-cta_sql,
-.st-key-cta_to_connections, .st-key-cta_to_discovery, .st-key-cta_to_transfer {
-    max-width: 280px;
+/* ---------- next step bar ---------- */
+[class*="st-key-m2s_next_"] {
+    position: relative;
+    overflow: hidden;
+    margin-top: 1.5rem;
+    padding: 1.05rem 1.2rem 1.15rem 1.4rem;
+    border: 1px solid var(--m2s-border);
+    border-radius: 14px;
+    background:
+        radial-gradient(130% 150% at 0% 0%, rgba(240, 246, 252, 0.055), transparent 62%),
+        rgba(240, 246, 252, 0.018);
 }
-.st-key-cta_conn [data-testid="stPageLink"] a,
-.st-key-cta_disc [data-testid="stPageLink"] a,
-.st-key-cta_sql [data-testid="stPageLink"] a,
+[class*="st-key-m2s_next_"]::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--m2s-accent);
+}
+.m2s-next-kicker {
+    display: flex; align-items: center; gap: 0.45rem;
+    font-size: 0.68rem; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--m2s-muted);
+}
+.m2s-next-num {
+    width: 1.1rem; height: 1.1rem; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.63rem; font-weight: 800; letter-spacing: 0;
+    background: rgba(240, 246, 252, 0.10);
+    color: var(--m2s-muted);
+}
+.m2s-next-title {
+    font-size: 1.04rem; font-weight: 750; letter-spacing: -0.01em;
+    margin-top: 0.3rem;
+}
+.m2s-next-hint {
+    font-size: 0.84rem; color: var(--m2s-muted);
+    margin-top: 0.2rem; max-width: 64ch;
+}
+[class*="st-key-m2s_next_"] [data-testid="stPageLink"] a {
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    gap: 0.45rem;
+    height: 42px;
+    box-sizing: border-box;
+    border: 0 !important;
+    border-radius: 10px !important;
+    padding: 0 1.05rem !important;
+    font-weight: 750 !important;
+    font-size: 0.92rem !important;
+    text-decoration: none !important;
+    color: #041018 !important;
+    transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+[class*="st-key-m2s_next_"] [data-testid="stPageLink"] a p {
+    margin: 0 !important;
+    font-weight: 750 !important;
+    color: #041018 !important;
+}
+[class*="st-key-m2s_next_"] [data-testid="stPageLink"] a [data-testid="stIconMaterial"] {
+    color: #041018 !important;
+    font-size: 1.15rem !important;
+}
+[class*="st-key-m2s_next_"] [data-testid="stPageLink"] a:hover { transform: translateY(-1px); }
+
+.st-key-m2s_next_discovery {
+    border-color: rgba(34, 211, 238, 0.26);
+    background: linear-gradient(90deg, rgba(34, 211, 238, 0.11), rgba(240, 246, 252, 0.02) 46%);
+}
+.st-key-m2s_next_discovery::before { background: linear-gradient(180deg, #22d3ee, #67e8f9); }
+.st-key-m2s_next_discovery .m2s-next-num { background: rgba(34, 211, 238, 0.22); color: #7af0ff; }
+.st-key-m2s_next_discovery [data-testid="stPageLink"] a {
+    background: linear-gradient(135deg, #22d3ee, #67e8f9) !important;
+    box-shadow: 0 8px 20px rgba(34, 211, 238, 0.26);
+}
+.st-key-m2s_next_discovery [data-testid="stPageLink"] a:hover {
+    box-shadow: 0 12px 26px rgba(34, 211, 238, 0.36);
+}
+
+.st-key-m2s_next_transfer {
+    border-color: rgba(251, 146, 60, 0.26);
+    background: linear-gradient(90deg, rgba(251, 146, 60, 0.11), rgba(240, 246, 252, 0.02) 46%);
+}
+.st-key-m2s_next_transfer::before { background: linear-gradient(180deg, #fb923c, #fdba74); }
+.st-key-m2s_next_transfer .m2s-next-num { background: rgba(251, 146, 60, 0.22); color: #ffd08a; }
+.st-key-m2s_next_transfer [data-testid="stPageLink"] a {
+    background: linear-gradient(135deg, #fb923c, #fdba74) !important;
+    box-shadow: 0 8px 20px rgba(251, 146, 60, 0.26);
+}
+.st-key-m2s_next_transfer [data-testid="stPageLink"] a:hover {
+    box-shadow: 0 12px 26px rgba(251, 146, 60, 0.36);
+}
+
+.st-key-m2s_next_connections {
+    border-color: rgba(63, 185, 80, 0.26);
+    background: linear-gradient(90deg, rgba(63, 185, 80, 0.11), rgba(240, 246, 252, 0.02) 46%);
+}
+.st-key-m2s_next_connections::before { background: linear-gradient(180deg, #3fb950, #9ee3a8); }
+.st-key-m2s_next_connections .m2s-next-num { background: rgba(63, 185, 80, 0.22); color: #9ee3a8; }
+.st-key-m2s_next_connections [data-testid="stPageLink"] a {
+    background: linear-gradient(135deg, #3fb950, #9ee3a8) !important;
+    box-shadow: 0 8px 20px rgba(63, 185, 80, 0.26);
+}
+.st-key-m2s_next_connections [data-testid="stPageLink"] a:hover {
+    box-shadow: 0 12px 26px rgba(63, 185, 80, 0.36);
+}
+
+/* Inline jump, used next to a warning rather than as a page footer. */
+.st-key-cta_to_connections, .st-key-cta_to_discovery, .st-key-cta_to_transfer {
+    max-width: 240px;
+}
 .st-key-cta_to_connections [data-testid="stPageLink"] a,
 .st-key-cta_to_discovery [data-testid="stPageLink"] a,
 .st-key-cta_to_transfer [data-testid="stPageLink"] a {
     display: inline-flex !important;
     align-items: center;
     gap: 0.4rem;
-    border-radius: 8px !important;
-    padding: 0.55rem 0.95rem !important;
-    font-weight: 650 !important;
+    height: 38px;
+    box-sizing: border-box;
+    border-radius: 9px !important;
+    padding: 0 0.9rem !important;
+    font-weight: 700 !important;
+    font-size: 0.88rem !important;
     text-decoration: none !important;
-    border: 1px solid rgba(76, 141, 255, 0.45) !important;
-    background: var(--m2s-accent-soft) !important;
-    color: #dbe8ff !important;
+    border: 1px solid var(--m2s-border) !important;
+    background: rgba(240, 246, 252, 0.05) !important;
+    color: #e6edf3 !important;
 }
-.st-key-cta_sql [data-testid="stPageLink"] a,
-.st-key-cta_to_transfer [data-testid="stPageLink"] a {
-    border-color: rgba(251, 146, 60, 0.5) !important;
-    background: linear-gradient(135deg, rgba(251, 146, 60, 0.28), rgba(245, 158, 11, 0.12)) !important;
-    color: #ffd08a !important;
+.st-key-cta_to_connections [data-testid="stPageLink"] a:hover,
+.st-key-cta_to_discovery [data-testid="stPageLink"] a:hover,
+.st-key-cta_to_transfer [data-testid="stPageLink"] a:hover {
+    background: rgba(240, 246, 252, 0.10) !important;
+    border-color: rgba(240, 246, 252, 0.22) !important;
 }
 
 /* ---------- nesting option cards ---------- */
@@ -865,6 +973,36 @@ LIGHT_CSS = """
 .m2s-topbar-name { color: #1f2328; }
 .m2s-crumb-root,
 .m2s-crumb-sep { color: #57606a; }
+
+[class*="st-key-m2s_next_"] {
+    background: #ffffff;
+    border-color: #d8dce2;
+}
+.m2s-next-title { color: #1f2328; }
+.m2s-next-hint { color: #57606a; }
+.m2s-next-kicker { color: #57606a; }
+.st-key-m2s_next_discovery {
+    border-color: rgba(8, 145, 178, 0.38);
+    background: linear-gradient(90deg, rgba(34, 211, 238, 0.14), #ffffff 44%);
+}
+.st-key-m2s_next_discovery .m2s-next-num { background: #0891b2; color: #ffffff; }
+.st-key-m2s_next_transfer {
+    border-color: rgba(234, 88, 12, 0.34);
+    background: linear-gradient(90deg, rgba(251, 146, 60, 0.16), #ffffff 44%);
+}
+.st-key-m2s_next_transfer .m2s-next-num { background: #ea580c; color: #ffffff; }
+.st-key-m2s_next_connections {
+    border-color: rgba(26, 127, 55, 0.34);
+    background: linear-gradient(90deg, rgba(63, 185, 80, 0.16), #ffffff 44%);
+}
+.st-key-m2s_next_connections .m2s-next-num { background: #1a7f37; color: #ffffff; }
+.st-key-cta_to_connections [data-testid="stPageLink"] a,
+.st-key-cta_to_discovery [data-testid="stPageLink"] a,
+.st-key-cta_to_transfer [data-testid="stPageLink"] a {
+    background: #ffffff !important;
+    border-color: #d8dce2 !important;
+    color: #1f2328 !important;
+}
 .m2s-crumb-page { color: #1f2328; }
 .m2s-crumb-page[data-page="connections"] { color: #16a34a; }
 .m2s-crumb-page[data-page="discovery"] { color: #0e7490; }
@@ -1400,11 +1538,59 @@ def stepper(active: str) -> None:
 
 
 def page_cta(page_key: str, label: str, icon: str, widget_key: str) -> None:
+    """Compact inline jump, for use next to a warning."""
     page = PAGES.get(page_key)
     if page is None:
         return
     with st.container(key=widget_key):
         st.page_link(page, label=label, icon=icon, width="stretch")
+
+
+NEXT_STEPS = {
+    "connections": {
+        "num": "1",
+        "title": "Bağlantılar",
+        "label": "Bağlantılara git",
+        "icon": ":material/settings_ethernet:",
+    },
+    "discovery": {
+        "num": "2",
+        "title": "Şema keşfi",
+        "label": "Şema keşfine geç",
+        "icon": ":material/schema:",
+    },
+    "transfer": {
+        "num": "3",
+        "title": "SQL aktarımı",
+        "label": "SQL aktarımına geç",
+        "icon": ":material/moving:",
+    },
+}
+
+
+def next_step(page_key: str, hint: str, kicker: str = "Sıradaki adım") -> None:
+    """
+    Footer bar that hands the user to the next page.
+
+    Reads as a closing section of the page rather than a stray button: the step
+    number, its name and what it does on the left, one clear action on the right.
+    """
+    page = PAGES.get(page_key)
+    meta = NEXT_STEPS.get(page_key)
+    if page is None or meta is None:
+        return
+    with st.container(key=f"m2s_next_{page_key}"):
+        row = st.columns([3.4, 1.35], vertical_alignment="center")
+        with row[0]:
+            st.markdown(
+                f'<div class="m2s-next-kicker">'
+                f'<span class="m2s-next-num">{meta["num"]}</span>{kicker}</div>'
+                f'<div class="m2s-next-title">{meta["title"]}</div>'
+                f'<div class="m2s-next-hint">{hint}</div>',
+                unsafe_allow_html=True,
+            )
+        with row[1]:
+            st.page_link(page, label=meta["label"], icon=meta["icon"], width="stretch")
 
 
 def need_connections(blockers: Sequence[str]) -> None:

@@ -35,6 +35,8 @@ def _sidebar_status(settings: Settings) -> None:
         sql = theme.status_row(
             "SQL Server", f"{settings.mssql.get('database')} · {settings.schema}", "ok"
         )
+    elif settings.sql_needs_password:
+        sql = theme.status_row("SQL Server", "şifre bekliyor", "warn")
     else:
         sql = theme.status_row("SQL Server", "yalnızca aktarım için", "off")
 

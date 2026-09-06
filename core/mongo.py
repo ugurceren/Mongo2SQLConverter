@@ -8,11 +8,26 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 from bson import ObjectId
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
 logger = logging.getLogger("mongo2sql")
+
+
+def _value_at(doc: dict[str, Any] | None, path: str) -> Any:
+    current: Any = doc
+    if current is None:
+        return None
+    for part in path.split("."):
+        if not part:
+            continue
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+        if current is None:
+            return None
+    return current
 
 
 class MongoClientWrapper:
@@ -82,6 +97,19 @@ class MongoClientWrapper:
             return int(col.estimated_document_count())
         except Exception:
             return int(col.count_documents({}))
+
+    def date_bounds(
+        self, collection: str, field: str
+    ) -> tuple[datetime | None, datetime | None]:
+        """Earliest and latest BSON dates stored at `field` (dotted paths allowed)."""
+        if not field:
+            return None, None
+        col = self.collection(collection)
+        filt = {field: {"$type": "date"}}
+        projection = {field: 1}
+        lowest = col.find_one(filt, projection, sort=[(field, ASCENDING)])
+        highest = col.find_one(filt, projection, sort=[(field, DESCENDING)])
+        return _value_at(lowest, field), _value_at(highest, field)
 
     def has_index_on(self, collection: str, field: str) -> bool:
         """True when an index starts with `field`, so a range scan can use it."""

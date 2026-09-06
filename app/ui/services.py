@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import streamlit as st
@@ -20,10 +21,19 @@ from core.inspect import (
     sql_ident,
 )
 from core.mongo import MongoClientWrapper
-from core.mssql import MssqlConnection, available_drivers
+from core.mssql import (
+    AUTH_NEEDS_PASSWORD,
+    MssqlConnection,
+    auth_mode,
+    available_drivers,
+)
 from core.settings import load_connection_overrides, load_settings
 
 COLLECTIONS_KEY = "collections"
+# Password typed for this session only, when the user asked not to store it.
+SQL_SESSION_PASSWORD = "sql_session_password"
+
+ENCRYPT_CHOICES = ("default", "yes", "no")
 
 
 @dataclass
@@ -39,7 +49,22 @@ class Settings:
         return bool(self.mongo.get("uri") and self.mongo.get("database"))
 
     @property
+    def sql_auth(self) -> str:
+        return auth_mode(self.mssql)
+
+    @property
+    def sql_needs_password(self) -> bool:
+        """Target is filled in but the chosen mode has no password to use yet."""
+        if not (self.mssql.get("server") and self.mssql.get("database")):
+            return False
+        return self.sql_auth in AUTH_NEEDS_PASSWORD and not self.mssql_password
+
+    @property
     def sql_ready(self) -> bool:
+        # A password mode without a password would offer the transfer page a
+        # write that cannot connect, so it does not count as ready.
+        if self.sql_needs_password:
+            return False
         return bool(self.mssql.get("server") and self.mssql.get("database"))
 
     @property
@@ -64,12 +89,15 @@ def load_state() -> Settings:
     stored = load_connection_overrides()
     mongo = cfg.get("mongodb") or {}
     mssql = cfg.get("mssql") or {}
+    saved_sql_password = (stored.get("mssql") or {}).get("password") or mssql.get("password")
     return Settings(
         mongo=mongo,
         mssql=mssql,
         profiler=cfg.get("profiler") or {},
         mongo_password=(stored.get("mongodb") or {}).get("password") or mongo.get("password"),
-        mssql_password=(stored.get("mssql") or {}).get("password") or mssql.get("password"),
+        # A session password wins: it is the one the user just typed and chose
+        # not to write to disk.
+        mssql_password=st.session_state.get(SQL_SESSION_PASSWORD) or saved_sql_password,
     )
 
 
@@ -87,6 +115,16 @@ def mongo_client(mongo_cfg: dict[str, Any]) -> MongoClientWrapper:
     )
 
 
+def encrypt_flag(raw: Any) -> bool | None:
+    """Config's encrypt choice as a tristate; None leaves it to the driver."""
+    text = str(raw or "default").strip().lower()
+    if text in ("yes", "true", "1"):
+        return True
+    if text in ("no", "false", "0"):
+        return False
+    return None
+
+
 def sql_target(
     mssql_cfg: dict[str, Any], password: str | None, schema: str | None = None
 ) -> MssqlConnection:
@@ -96,8 +134,11 @@ def sql_target(
         schema=schema or mssql_cfg.get("schema") or "dbo",
         driver=mssql_cfg.get("driver") or available_drivers()[0],
         trusted_connection=bool(mssql_cfg.get("trusted_connection", True)),
+        auth=auth_mode(mssql_cfg),
         username=mssql_cfg.get("username") or None,
         password=password,
+        encrypt=encrypt_flag(mssql_cfg.get("encrypt")),
+        trust_certificate=bool(mssql_cfg.get("trust_certificate", False)),
     )
 
 
@@ -197,6 +238,7 @@ def invalidate_collections() -> None:
     st.session_state.pop(COUNTS_KEY, None)
     st.session_state.pop(PLAN_CACHE_KEY, None)
     st.session_state.pop("field_indexes", None)
+    st.session_state.pop(DATE_BOUNDS_KEY, None)
 
 
 COUNTS_KEY = "collection_counts"
@@ -510,12 +552,38 @@ def invalidate_plans() -> None:
 # --------------------------------------------------------------------------
 
 
+DATE_BOUNDS_KEY = "date_field_bounds"
+
+
 def date_field_options(settings: Settings, collection: str) -> list[dict[str, Any]]:
     """Date-typed fields found by the cached shape peek; no extra Mongo read."""
     shape = peek_shape(settings, collection)
     if not shape:
         return []
     return list(shape.get("date_fields") or [])
+
+
+def date_field_bounds(
+    settings: Settings, collection: str, field: str
+) -> tuple[datetime | None, datetime | None]:
+    """Min/max BSON dates for one field, cached per collection+field this session."""
+    if not settings.mongo_ready or not collection or not field:
+        return None, None
+    cache = st.session_state.setdefault(DATE_BOUNDS_KEY, {})
+    key = f"{collection}|{field}"
+    if key in cache:
+        return cache[key]
+    mongo = mongo_client(settings.mongo)
+    try:
+        mongo.connect()
+        with st.spinner("Tarih aralığı okunuyor..."):
+            bounds = mongo.date_bounds(collection, field)
+        cache[key] = bounds
+        return bounds
+    except Exception:
+        return None, None
+    finally:
+        mongo.close()
 
 
 def field_has_index(settings: Settings, collection: str, field: str) -> bool | None:
