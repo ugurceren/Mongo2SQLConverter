@@ -101,27 +101,43 @@ class MongoClientWrapper:
     def date_bounds(
         self, collection: str, field: str
     ) -> tuple[datetime | None, datetime | None]:
-        """Earliest and latest BSON dates stored at `field` (dotted paths allowed)."""
+        """Earliest and latest BSON dates stored at `field` (dotted paths allowed).
+
+        Call only when `field` leads a range index: sort + limit 1 then uses it.
+        `$type` is omitted so the planner is not forced off that index.
+        """
         if not field:
             return None, None
         col = self.collection(collection)
-        filt = {field: {"$type": "date"}}
         projection = {field: 1}
-        lowest = col.find_one(filt, projection, sort=[(field, ASCENDING)])
-        highest = col.find_one(filt, projection, sort=[(field, DESCENDING)])
-        return _value_at(lowest, field), _value_at(highest, field)
+        lowest = col.find_one({}, projection, sort=[(field, ASCENDING)])
+        highest = col.find_one({}, projection, sort=[(field, DESCENDING)])
+        lo = _value_at(lowest, field)
+        hi = _value_at(highest, field)
+        return (
+            lo if isinstance(lo, datetime) else None,
+            hi if isinstance(hi, datetime) else None,
+        )
 
-    def has_index_on(self, collection: str, field: str) -> bool:
-        """True when an index starts with `field`, so a range scan can use it."""
+    def leading_range_index_fields(self, collection: str) -> set[str]:
+        """Field paths that lead an ascending/descending index (usable for a range)."""
         try:
             info = self.collection(collection).index_information()
         except Exception:
-            return False
+            return set()
+        out: set[str] = set()
         for spec in info.values():
             keys = spec.get("key") or []
-            if keys and keys[0][0] == field:
-                return True
-        return False
+            if not keys:
+                continue
+            name, direction = keys[0][0], keys[0][1]
+            if direction in (ASCENDING, DESCENDING, 1, -1):
+                out.add(name)
+        return out
+
+    def has_index_on(self, collection: str, field: str) -> bool:
+        """True when an index starts with `field`, so a range scan can use it."""
+        return field in self.leading_range_index_fields(collection)
 
     def iter_documents(
         self,
@@ -150,8 +166,8 @@ class MongoClientWrapper:
         try:
             for doc in cursor:
                 count += 1
-                if count % 1000 == 0:
-                    logger.info("read %s documents from %s", count, collection)
+                if count % 25000 == 0:
+                    logger.debug("read %s documents from %s", count, collection)
                 yield doc
         finally:
             cursor.close()

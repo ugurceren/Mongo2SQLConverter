@@ -59,6 +59,8 @@ ALTER ROLE db_ddladmin   ADD MEMBER [svc_mongo2sql];
 python run.py
 ```
 
+Aktarım ve profil satırları `logs/mongo2sql.log` dosyasına yazılır (başlangıç, ilerleme, bitiş, hata). Dosya 10 MB olunca döner. `logs/` git'e eklenmez.
+
 **CLI (DRDL):**
 
 ```powershell
@@ -67,11 +69,21 @@ python tools/infer_schema.py --collection conversations --sample 5000 --out-ddl 
 python tools/infer_schema.py --from-file export.json --collection mycol --out-drdl out.drdl
 ```
 
+## Tablo adlari
+
+Tablo adlari **PascalCase** uretilir: `hybrid_conversations` koleksiyonu `HybridConversations` tablosu olur. Alt tablolar kok addan ayirici kullanmadan turer, yani `conversations` icindeki `messages` dizisi `ConversationsMessages` olur.
+
+**Kolon adlari degismez.** Mongo alan adi neyse kolon adi odur (`createdAt` -> `createdAt`), boylece kolona bakip hangi alandan geldigi anlasilir.
+
+Kok tablo adini **SQL aktarimi** sayfasindaki **Kok tablo** kutusundan degistirebilirsiniz; ne yazarsaniz yazin PascalCase'e cevrilir ve alt tablolar o ada gore yeniden adlandirilir.
+
+Onceki surumler `conversations_messages` gibi adlar uretiyordu. Eski adlarla olusmus tablolariniz varsa yeni adlar ayri tablolar olur; eskilerini elle yeniden adlandirin ya da birakin.
+
 ## Aktarimi daraltma
 
 **SQL aktarimi** sayfasinda koleksiyonun tamamini yazmak zorunlu degil.
 
-**Tarih araligi:** Profilleme sirasinda bulunan tarih tipli alanlar (`createdAt`, `updatedAt` gibi) listelenir; birini secip baslangic ve bitis gunu verirsiniz. Bitis gunu dahildir. Gunler "Yerel saat" ya da "UTC" olarak yorumlanir ve Mongo'ya UTC olarak gider. Secilen alanda index yoksa uyari cikar; hizlandirmak icin:
+**Tarih araligi:** Profilleme sirasinda bulunan tarih tipli alanlar (`createdAt`, `updatedAt` gibi) listelenir; index'li olanlar listenin basina gelir ve varsayilan secim olur. Birini secip baslangic ve bitis gunu verirsiniz. Bitis gunu dahildir. Gunler "Yerel saat" ya da "UTC" olarak yorumlanir ve Mongo'ya UTC olarak gider. Index'siz alanda min/max okunmaz (koleksiyon taramasi yapilmaz). Hizlandirmak icin:
 
 ```javascript
 db.conversations.createIndex({ createdAt: 1 })
@@ -88,6 +100,7 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 ## Yapi
 
 - `core/inspect.py` — sema profilleme, DRDL/DDL
+- `core/logutil.py` — `logs/mongo2sql.log` dosya günlüğü
 - `core/transfer.py` — plana gore flatten + MSSQL'e yazma
 - `core/mongo.py` — Mongo baglantisi
 - `core/mssql.py` — MSSQL baglantisi

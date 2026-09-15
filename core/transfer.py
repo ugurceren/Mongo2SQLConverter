@@ -7,23 +7,24 @@ specific collection. Changing the selected collection changes the tables.
 
 Re-running is idempotent: a batch first deletes the root rows it is about to
 write, and child rows follow through the plan's ON DELETE CASCADE keys.
+A first load (empty root table, or `clear_first`) skips that delete.
 """
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterator, Sequence
 
-from bson import Binary, Decimal128, ObjectId, json_util
+from bson import Binary, Decimal128, ObjectId
 
-from core.inspect import ddl_statements, key_column_type, sql_ident
+from core.inspect import ddl_statements, key_column_type, sql_table_ident
+from core.logutil import JobLog
 from core.mongo import MongoClientWrapper, encode_mongo_id, encode_resume_id
 from core.mssql import MssqlConnection
-from core.textutil import clip_utf16, utf16_len
+from core.textutil import clip_utf16, json_text, utf16_len
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -47,14 +48,14 @@ def retarget_plan(
         out["schema"] = schema
 
     old_root = plan["root"]["table"]
-    new_root = sql_ident(root_table) if root_table else old_root
+    new_root = sql_table_ident(root_table) if root_table else old_root
     out["root"] = dict(plan["root"])
     out["root"]["table"] = new_root
 
     children = []
     for child in plan["children"]:
         renamed = dict(child)
-        if new_root != old_root and child["table"].startswith(old_root + "_"):
+        if new_root != old_root and child["table"].startswith(old_root):
             renamed["table"] = new_root + child["table"][len(old_root) :]
         children.append(renamed)
     out["children"] = children
@@ -270,13 +271,6 @@ def plan_column_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
-def _json_text(value: Any) -> str:
-    try:
-        return json_util.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return json.dumps(value, default=str, ensure_ascii=False)
-
-
 def _as_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
@@ -287,7 +281,7 @@ def _text_of(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, (dict, list, tuple)):
-        return _json_text(value)
+        return json_text(value)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, datetime):
@@ -457,6 +451,7 @@ class TransferStats:
     last_id: str | None = None
     last_id_type: str | None = None
     mode: str = "full"
+    first_load: bool = False
 
     def add_rows(self, table: str, count: int) -> None:
         if count:
@@ -587,6 +582,8 @@ def transfer_collection(
     query: dict[str, Any] | None = None,
     mode: str = "full",
     progress: ProgressCallback | None = None,
+    expected_count: int | None = None,
+    log_extra: dict[str, Any] | None = None,
 ) -> TransferStats:
     """Stream a collection into the plan's tables, batch by batch.
 
@@ -607,8 +604,22 @@ def transfer_collection(
             target.clear_table(schema, child["table"])
         target.clear_table(schema, root_table)
 
-    stats = TransferStats(mode=mode)
-    expected = sample or None
+    # Empty destination: DELETE would match nothing and still cost a round-trip
+    # per batch. A re-run into a table that already has rows keeps the delete.
+    exists, max_id = target.max_key(schema, root_table, "mongo_id")
+    first_load = (not exists) or max_id is None
+    stats = TransferStats(mode=mode, first_load=first_load)
+    expected = sample if sample else expected_count
+    job = JobLog(
+        "aktarım",
+        collection=collection,
+        tablo=f"{schema}.{root_table}",
+        mod=mode,
+        parti=batch_size,
+        ilk_yükleme=first_load,
+        **(log_extra or {}),
+    )
+    job.start(beklenen=expected)
 
     keys: list[Any] = []
     root_rows: list[list[Any]] = []
@@ -618,7 +629,8 @@ def transfer_collection(
         if not root_rows:
             return
         try:
-            target.delete_keys(schema, root_table, "mongo_id", keys)
+            if not first_load:
+                target.delete_keys(schema, root_table, "mongo_id", keys)
             stats.add_rows(root_table, target.insert_rows(schema, root_table, root_columns, root_rows))
             for table, columns in child_specs:
                 rows = child_rows[table]
@@ -627,6 +639,13 @@ def transfer_collection(
             target.commit()
         except Exception as exc:
             target.rollback()
+            job.log.exception(
+                "aktarım kesildi %s belgeler=%s süre_sn=%.1f error=%s",
+                job._kv(),
+                stats.documents,
+                job.elapsed(),
+                exc,
+            )
             message = str(exc)
             if "22001" in message or "truncated" in message.lower():
                 raise RuntimeError(
@@ -664,8 +683,21 @@ def transfer_collection(
             flush()
             if progress:
                 progress(stats.documents, expected or 0)
+            job.progress(
+                stats.documents,
+                expected or 0,
+                satır=stats.total_rows,
+                last_id=stats.last_id,
+            )
 
     flush()
     if progress:
         progress(stats.documents, expected or stats.documents)
+    job.done(
+        belgeler=stats.documents,
+        satır=stats.total_rows,
+        atlanan=stats.skipped_no_id,
+        kırpılan=stats.truncated,
+        last_id=stats.last_id,
+    )
     return stats

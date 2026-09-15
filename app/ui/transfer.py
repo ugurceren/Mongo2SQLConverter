@@ -17,7 +17,6 @@ from app.ui.services import (
     count_matching,
     date_field_bounds,
     date_field_options,
-    field_has_index,
     format_int,
     invalidate_sql_watermarks,
     mongo_client,
@@ -27,7 +26,8 @@ from app.ui.services import (
     sql_target,
     stored_plan,
 )
-from core.inspect import nesting_labels, render_database_ddl, sql_ident
+from core.inspect import nesting_labels, render_database_ddl, sql_table_ident
+from core.logutil import get_logger, log_path_display
 from core.mongo import combine_filters, date_range_filter, decode_mongo_id, id_after_filter
 from core.settings import (
     default_transfer_prefs,
@@ -162,8 +162,26 @@ def _percent(fill: float | None) -> str:
 def _field_label(field: dict[str, Any]) -> str:
     fill = field.get("fill")
     if fill is None:
-        return f"{field['path']} · {format_int(field['present'])} belge"
-    return f"{field['path']} · {_percent(fill)}"
+        base = f"{field['path']} · {format_int(field['present'])} belge"
+    else:
+        base = f"{field['path']} · {_percent(fill)}"
+    indexed = field.get("indexed")
+    if indexed is True:
+        return f"{base} · index var"
+    if indexed is False:
+        return f"{base} · index yok"
+    return base
+
+
+def _preferred_date_path(candidates: list[dict[str, Any]], saved: str | None) -> str:
+    """Indexed date field first; keep a saved pick only when it is also indexed."""
+    paths = [item["path"] for item in candidates]
+    indexed = [item["path"] for item in candidates if item.get("indexed") is True]
+    if saved in paths and (saved in indexed or not indexed):
+        return saved
+    if indexed:
+        return indexed[0]
+    return paths[0]
 
 
 def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, Any]:
@@ -171,6 +189,7 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
     candidates = date_field_options(settings, collection)
     paths = [field["path"] for field in candidates]
     labels = {field["path"]: _field_label(field) for field in candidates}
+    indexed_paths = [item["path"] for item in candidates if item.get("indexed") is True]
 
     with st.container(border=True):
         theme.card_title(
@@ -200,18 +219,36 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
                 "timezone": saved["timezone"],
             }
 
+        if indexed_paths:
+            st.caption(
+                "Index'li tarih alanları listenin başında. Aralık taraması bunlarda index kullanır."
+            )
+        elif any(item.get("indexed") is False for item in candidates):
+            st.warning(
+                "Hiçbir tarih alanında range index yok; seçilen aralık tüm koleksiyonu tarar."
+            )
+
         row = st.columns([2.2, 1.4, 1.4, 1.6], vertical_alignment="bottom")
         with row[0]:
-            index = paths.index(saved["field"]) if saved["field"] in paths else 0
+            field_key = f"tr_date_field_{collection}"
+            preferred = _preferred_date_path(candidates, saved.get("field"))
+            applied = f"tr_date_idx_applied_{collection}"
+            current = st.session_state.get(field_key)
+            if current not in paths:
+                st.session_state[field_key] = preferred
+            elif not st.session_state.get(applied):
+                if current not in indexed_paths and preferred in indexed_paths:
+                    st.session_state[field_key] = preferred
+            st.session_state[applied] = True
             field = st.selectbox(
                 "Tarih alanı",
                 options=paths,
-                index=index,
                 format_func=lambda path: labels.get(path, path),
-                key=f"tr_date_field_{collection}",
+                key=field_key,
                 help=(
                     "Yüzde, örneklenen belgelerin ne kadarında bu alanda gerçek bir "
-                    "tarih olduğunu gösterir. Alanı boş olan belgeler aralığa girmez."
+                    "tarih olduğunu gösterir. Index'li alanlar önce gelir. "
+                    "Alanı boş olan belgeler aralığa girmez."
                 ),
             )
 
@@ -219,7 +256,14 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
         zone_now = st.session_state.get(zone_key) or saved.get("timezone") or "local"
         if zone_now not in ("local", "utc"):
             zone_now = "local"
-        lo_dt, hi_dt = date_field_bounds(settings, collection, field)
+        indexed = next(
+            (item.get("indexed") for item in candidates if item["path"] == field),
+            None,
+        )
+        if indexed is True:
+            lo_dt, hi_dt = date_field_bounds(settings, collection, field)
+        else:
+            lo_dt, hi_dt = None, None
         lo_date = _as_calendar_date(lo_dt, zone_now)
         hi_date = _as_calendar_date(hi_dt, zone_now)
 
@@ -227,8 +271,16 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
         end_key = f"tr_date_end_{collection}"
         seed_key = f"tr_date_seed_{collection}"
         if st.session_state.get(seed_key) != field:
-            st.session_state[start_key] = lo_date or date.today().replace(month=1, day=1)
-            st.session_state[end_key] = hi_date or date.today()
+            if lo_date and hi_date:
+                st.session_state[start_key] = lo_date
+                st.session_state[end_key] = hi_date
+            elif indexed is True:
+                st.session_state[start_key] = date.today().replace(month=1, day=1)
+                st.session_state[end_key] = date.today()
+            else:
+                # Unindexed min/max would scan the collection; seed a single day.
+                st.session_state[start_key] = date.today()
+                st.session_state[end_key] = date.today()
             st.session_state[seed_key] = field
 
         with row[1]:
@@ -273,9 +325,19 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
         )
         if lo_date and hi_date:
             st.caption(f"Verideki aralık · `{field}` {lo_date:%d.%m.%Y}–{hi_date:%d.%m.%Y}")
-        else:
+        elif indexed is True:
             st.caption(
                 f"`{field}` için min/max okunamadı; kutular takvim varsayılanıyla doldu."
+            )
+        elif indexed is False:
+            st.caption(
+                f"`{field}` index'siz olduğu için min/max okunmadı (koleksiyon taraması). "
+                "Kutular bugüne ayarlandı; aralığı kendiniz seçin."
+            )
+        else:
+            st.caption(
+                "Index listesi okunamadı; min/max taraması atlandı. "
+                "Kutular bugüne ayarlandı."
             )
 
         chosen = next((item for item in candidates if item["path"] == field), None)
@@ -285,13 +347,27 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
                 "Bu alanı taşımayan belgeler hiçbir aralığa girmez."
             )
 
-        if field_has_index(settings, collection, field) is False:
+        if indexed is False and indexed_paths:
             st.warning(
                 f"`{field}` alanında index yok; Mongo tüm koleksiyonu tarar. "
+                f"Index'li alternatif: `{indexed_paths[0]}`."
+            )
+        elif indexed is False:
+            st.caption(
                 f"Hızlandırmak için: `db.{collection}.createIndex({{ {field}: 1 }})`"
             )
 
-        if st.button("Kaç kayıt?", key=f"tr_date_count_{collection}"):
+        count_ok = indexed is True
+        if st.button(
+            "Kaç kayıt?",
+            key=f"tr_date_count_{collection}",
+            disabled=not count_ok,
+            help=(
+                "Index'li alanda kaç belgenin aralığa girdiğini sayar."
+                if count_ok
+                else "Index yokken sayım tüm koleksiyonu tarar; bu yüzden kapalı."
+            ),
+        ):
             total = count_matching(settings, collection, _date_query(date_filter))
             if total is None:
                 st.caption("Sayım yapılamadı.")
@@ -512,10 +588,10 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         with row[2]:
             table = st.text_input(
                 "Kök tablo",
-                value=sql_ident(collection) if collection else "",
+                value=sql_table_ident(collection) if collection else "",
                 key=f"tr_table_{collection or 'none'}",
                 disabled=not collection,
-                help="Alt tablolar bu addan türer: <ad>_<alan>.",
+                help="PascalCase yazılır. Alt tablolar bu addan türer: <Ad><Alan>.",
             )
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
@@ -524,7 +600,9 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
 
     options["collection"] = collection
     options["schema"] = (schema or "").strip() or settings.schema
-    options["table"] = (table or "").strip()
+    # Normalised here as well as in the plan, so the watermark and table-exists
+    # lookups ask about the name the transfer will actually create.
+    options["table"] = sql_table_ident(table) if (table or "").strip() else ""
     if not collection:
         return options
 
@@ -532,7 +610,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
 
     st.write("")
     options["nesting"] = nesting_card(
-        settings, collection, options["table"] or sql_ident(collection)
+        settings, collection, options["table"] or sql_table_ident(collection)
     )
 
     st.write("")
@@ -592,7 +670,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 "Profil örneği",
                 min_value=0,
                 value=5000,
-                step=500,
+                step=1000,
                 key="tr_sample",
                 help=(
                     "Şema için kaç belge taransın. 5000 önerilir. "
@@ -602,9 +680,9 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         with row2[1]:
             batch = st.number_input(
                 "Yazma partisi",
-                min_value=50,
+                min_value=100,
                 value=500,
-                step=50,
+                step=100,
                 key="tr_batch",
                 help=(
                     "SQL'e bir seferde kaç belgelik paket yazılsın. "
@@ -750,6 +828,11 @@ def _run(settings: Settings, options: dict) -> None:
         invalidate_sql_watermarks()
         if created:
             st.success("Oluşturulan tablolar: " + ", ".join(created))
+            get_logger().info(
+                "aktarım tablolar oluşturuldu collection=%s tablolar=%s",
+                options["collection"],
+                ", ".join(created),
+            )
         if existing:
             st.caption("Zaten mevcut: " + ", ".join(existing))
 
@@ -773,6 +856,7 @@ def _run(settings: Settings, options: dict) -> None:
         try:
             source.connect()
             expected = source.estimated_count(options["collection"], query)
+            date_note = _range_note(date_filter).lstrip(" ·")
             stats = transfer_collection(
                 source,
                 target,
@@ -784,6 +868,8 @@ def _run(settings: Settings, options: dict) -> None:
                 query=query,
                 mode=options["mode"],
                 progress=lambda done, _: on_progress(done, expected),
+                expected_count=expected,
+                log_extra={"aralık": date_note} if date_note else None,
             )
         finally:
             source.close()
@@ -802,6 +888,9 @@ def _run(settings: Settings, options: dict) -> None:
             cols[2].metric("Satır", stats.total_rows)
             cols[3].metric("Atlanan", stats.skipped_no_id)
             cols[4].metric("Kırpılan", stats.truncated)
+            if stats.first_load:
+                st.caption("İlk yükleme: hedef tablo boştu, parti silmeleri atlandı.")
+            st.caption(f"Günlük · `{log_path_display()}`")
             if stats.last_id:
                 st.caption(f"İşaret `_id` = `{stats.last_id}`")
             st.dataframe(
@@ -831,6 +920,9 @@ def render(settings: Settings) -> None:
         "Tam senkron tüm koleksiyonu yazar. Artımlı, SQL tablosundaki son `_id` "
         "sonrası yeni belgeleri ekler; eski kayıtlardaki güncelleme için tam senkron gerekir.",
         step="transfer",
+    )
+    st.caption(
+        f"Aktarım günlüğü `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır."
     )
 
     collections, error, warning = collection_list(settings)
@@ -916,6 +1008,11 @@ def render(settings: Settings) -> None:
         try:
             _run(settings, options)
         except Exception as exc:
+            get_logger().exception(
+                "aktarım başarısız collection=%s error=%s",
+                options.get("collection"),
+                exc,
+            )
             st.error(str(exc))
         else:
             st.session_state[RUN_DONE_KEY] = signature

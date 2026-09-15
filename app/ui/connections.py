@@ -8,6 +8,7 @@ import streamlit as st
 
 from app.ui import theme
 from app.ui.services import (
+    SQL_AUTH_LABELS,
     SQL_SESSION_PASSWORD,
     Settings,
     invalidate_collections,
@@ -39,11 +40,6 @@ HINT_SQL_SCHEMA = "dbo"
 HINT_SQL_USER = "sa"
 HINT_WIN_USER = "DOMAIN\\servis_hesabi"
 
-SQL_AUTH_LABELS = {
-    AUTH_WINDOWS: "Windows — bu oturum",
-    AUTH_SQL: "SQL Server hesabı",
-    AUTH_WINDOWS_USER: "Windows — başka hesap",
-}
 SQL_AUTH_ORDER = (AUTH_WINDOWS, AUTH_SQL, AUTH_WINDOWS_USER)
 
 ENCRYPT_LABELS = {

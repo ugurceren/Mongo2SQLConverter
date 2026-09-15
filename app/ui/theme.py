@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Iterable, Literal, Sequence
 
 import re
@@ -22,8 +23,8 @@ CSS = """
     --m2s-off: #6e7681;
     --m2s-rail: 104px;
     --m2s-topbar: 56px;
-    --m2s-sidebar: 248px;
-    --m2s-nav: 176px;
+    --m2s-sidebar: 292px;
+    --m2s-nav: 220px;
 }
 
 /* Keep the toolbar mounted: it hosts the button that reopens the sidebar. */
@@ -687,6 +688,20 @@ section[data-testid="stSidebar"] > div,
 .m2s-dot.warn { background: var(--m2s-warn); box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.16); }
 .m2s-dot.off { background: var(--m2s-off); }
 .m2s-status-text .m2s-status-value { color: var(--m2s-muted); }
+.m2s-detail { margin: 0.08rem 0 0.85rem 1.05rem; }
+.m2s-detail-row {
+    display: flex; flex-direction: column; gap: 0.06rem;
+    padding: 0.28rem 0 0.04rem;
+    line-height: 1.35;
+}
+.m2s-detail-key {
+    color: var(--m2s-muted); font-size: 0.68rem; font-weight: 600;
+    letter-spacing: 0.04em;
+}
+.m2s-detail-val {
+    min-width: 0; overflow-wrap: anywhere;
+    font-size: 0.8rem; opacity: 0.95;
+}
 .m2s-side-foot {
     margin-top: 1.6rem; padding-top: 0.8rem;
     border-top: 1px solid var(--m2s-border);
@@ -725,7 +740,8 @@ section[data-testid="stSidebar"] > div,
 [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] {
     display: none !important;
 }
-[data-testid="stSidebar"][aria-expanded="false"] .m2s-status { display: none !important; }
+[data-testid="stSidebar"][aria-expanded="false"] .m2s-status,
+[data-testid="stSidebar"][aria-expanded="false"] .m2s-detail { display: none !important; }
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-label,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-status-text,
 [data-testid="stSidebar"][aria-expanded="false"] .m2s-side-foot,
@@ -928,6 +944,12 @@ textarea:focus::placeholder {
 }
 
 code, pre, .stCode { font-size: 0.82rem; }
+/* Open expander shows the full script so the page grows; click the header to collapse. */
+[data-testid="stExpander"] [data-testid="stCode"],
+[data-testid="stExpander"] pre {
+    max-height: none !important;
+    overflow: visible !important;
+}
 iframe[height="0"], iframe[height="1"] { display: none !important; }
 </style>
 """
@@ -1177,15 +1199,64 @@ section[data-testid="stSidebar"] {
     border-color: #c2410c !important;
 }
 
-.stButton button {
+.stButton button,
+.stDownloadButton button,
+[data-testid="stFormSubmitButton"] button,
+button[kind="secondary"],
+button[kind="secondaryFormSubmit"],
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-secondaryFormSubmit"] {
     color: #1f2328 !important;
     background: #ffffff !important;
     border: 1px solid rgba(31, 35, 40, 0.18) !important;
 }
-button[kind="primary"], button[data-testid="stBaseButton-primary"] {
+.stButton button p,
+.stDownloadButton button p,
+[data-testid="stFormSubmitButton"] button p {
+    color: inherit !important;
+}
+button[kind="primary"],
+button[kind="primaryFormSubmit"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-primaryFormSubmit"] {
     background: #0969da !important;
     color: #ffffff !important;
     border: 0 !important;
+}
+button[kind="primary"] p,
+button[kind="primaryFormSubmit"] p,
+button[data-testid="stBaseButton-primary"] p,
+button[data-testid="stBaseButton-primaryFormSubmit"] p {
+    color: #ffffff !important;
+}
+
+/* Streamlit itself stays on Dark; its chrome icons are frost-white. */
+[data-testid="stTooltipHoverTarget"] button,
+[data-testid="stTooltipHoverTarget"] svg,
+[data-testid="stTextInput"] button,
+[data-testid="stTextInput"] button [data-testid="stIconMaterial"],
+[data-testid="stNumberInput"] button,
+[data-testid="stNumberInput"] button [data-testid="stIconMaterial"],
+[data-baseweb="select"] button,
+[data-baseweb="select"] button svg,
+[data-testid="stCheckbox"] [data-testid="stIconMaterial"],
+[data-testid="stHeadingWithActionElements"] a,
+[data-testid="stHeaderActionElements"] svg,
+[data-testid="stFileUploaderDropzone"] button {
+    color: #57606a !important;
+    -webkit-text-fill-color: #57606a !important;
+    fill: #57606a !important;
+    stroke: #57606a !important;
+}
+[data-testid="stTooltipHoverTarget"] button:disabled,
+[data-testid="stTextInput"] button:disabled,
+[data-testid="stTextInput"] button:disabled [data-testid="stIconMaterial"],
+[data-baseweb="select"] button:disabled svg {
+    color: #8c959f !important;
+    -webkit-text-fill-color: #8c959f !important;
+    fill: #8c959f !important;
+    stroke: #8c959f !important;
+    opacity: 0.85 !important;
 }
 .st-key-disc_database_drdl button {
     background: linear-gradient(135deg, #2f81f7, #0891b2) !important;
@@ -1615,12 +1686,25 @@ def nav_menu(
 
 def status_row(label: str, value: str, state: State = "off") -> str:
     """One status line. Collapsed to just its dot when the sidebar is a rail."""
+    shown = escape(value)
     return (
-        f'<div class="m2s-status" title="{label}: {value}">'
+        f'<div class="m2s-status" title="{escape(label)}: {shown}">'
         f'<span class="m2s-dot {state}"></span>'
-        f'<span class="m2s-status-text">{label}'
-        f'<span class="m2s-status-value"> · {value}</span></span></div>'
+        f'<span class="m2s-status-text">{escape(label)}'
+        f'<span class="m2s-status-value"> · {shown}</span></span></div>'
     )
+
+
+def status_detail(rows: Iterable[tuple[str, str]]) -> str:
+    """Key/value lines under a status row. Hidden while the sidebar is a rail."""
+    cells = "".join(
+        f'<div class="m2s-detail-row">'
+        f'<span class="m2s-detail-key">{escape(key)}</span>'
+        f'<span class="m2s-detail-val" title="{escape(value)}">{escape(value)}</span>'
+        f"</div>"
+        for key, value in rows
+    )
+    return f'<div class="m2s-detail">{cells}</div>'
 
 
 def sidebar_block(label: str, rows: Iterable[str], show_in_rail: bool = True) -> str:

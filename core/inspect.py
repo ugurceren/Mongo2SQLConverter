@@ -32,12 +32,14 @@ from bson import Binary, Decimal128, Int64, ObjectId, json_util
 
 from core.mongo import MongoClientWrapper
 from core.settings import load_settings
-from core.textutil import safe_console, utf16_len
+from core.textutil import safe_console, utf16_len, json_text
 
-# NVARCHAR widths we are willing to emit. Anything past the last bucket becomes
-# NVARCHAR(MAX). 450 is here because it is the widest NVARCHAR that still fits
-# in a SQL Server index key (900 bytes / 2).
+# NVARCHAR widths we are willing to emit. SQL Server's non-MAX NVARCHAR
+# ceiling is 4000 UTF-16 units; MAX is only used when a measured value
+# actually exceeds that. 450 is the widest NVARCHAR that still fits in a
+# SQL Server index key (900 bytes / 2).
 BUCKETS = (16, 32, 64, 128, 256, 450, 1000, 4000)
+NVARCHAR_INLINE_MAX = 4000
 INDEX_KEY_LIMIT = 450
 
 # int32 range; anything outside needs BIGINT.
@@ -107,10 +109,7 @@ class FieldStats:
             return
 
         if isinstance(value, str):
-            units = utf16_len(value)
-            if units > self.max_utf16:
-                self.max_utf16 = units
-                self.longest_sample = value[:preview_len]
+            self._record_text_width(value, preview_len)
             # Long values are never a useful enum, and holding them all would
             # dominate memory on a big scan.
             if not self.distinct_overflow and len(value) <= 200:
@@ -141,6 +140,23 @@ class FieldStats:
         if isinstance(value, (list, tuple)):
             self.array_max_len = max(self.array_max_len, len(value))
             self.array_total += len(value)
+            self._record_json_width(value, preview_len)
+            return
+
+        if isinstance(value, dict):
+            self._record_json_width(value, preview_len)
+
+    def _record_text_width(self, text: str, preview_len: int) -> None:
+        units = utf16_len(text)
+        if units > self.max_utf16:
+            self.max_utf16 = units
+            self.longest_sample = text[:preview_len]
+
+    def _record_json_width(self, value: Any, preview_len: int) -> None:
+        try:
+            self._record_text_width(json_text(value), preview_len)
+        except (TypeError, ValueError):
+            return
 
     @property
     def concrete_types(self) -> dict[str, int]:
@@ -284,11 +300,24 @@ def _merge_types(stats: list[FieldStats]) -> dict[str, int]:
 
 
 def nvarchar_width(max_utf16: int, headroom: float) -> str:
-    target = max(1, math.ceil(max_utf16 * headroom))
+    """Pick an NVARCHAR(n) bucket. MAX only when a measured value exceeds 4000."""
+    measured = max(0, max_utf16)
+    if measured > NVARCHAR_INLINE_MAX:
+        return "NVARCHAR(MAX)"
+    target = max(1, math.ceil(max(measured, 1) * headroom))
+    target = min(target, NVARCHAR_INLINE_MAX)
     for bucket in BUCKETS:
         if target <= bucket:
             return f"NVARCHAR({bucket})"
-    return "NVARCHAR(MAX)"
+    return f"NVARCHAR({NVARCHAR_INLINE_MAX})"
+
+
+def _json_sql_type(stat: FieldStats, headroom: float, reason: str) -> tuple[str, list[str]]:
+    sql = nvarchar_width(max(stat.max_utf16, 64), headroom)
+    notes = [reason]
+    if sql == "NVARCHAR(MAX)":
+        notes.append(f"JSON max {stat.max_utf16} > {NVARCHAR_INLINE_MAX}")
+    return sql, notes
 
 
 def _type_breakdown(concrete: dict[str, int]) -> str:
@@ -317,7 +346,9 @@ def sql_type_for(
             if as_json
             else f"sekil cakismasi ({_type_breakdown(concrete)})"
         )
-        return "NVARCHAR(MAX)", [f"{reason}: alt alanlar ayri kolon yapilmadi"]
+        return _json_sql_type(
+            stat, headroom, f"{reason}: alt alanlar ayri kolon yapilmadi"
+        )
 
     kinds = set(concrete)
 
@@ -359,9 +390,9 @@ def sql_type_for(
     if kind == "binary":
         return "VARBINARY(MAX)", notes
     if kind == "object":
-        return "NVARCHAR(MAX)", ["JSON olarak saklanir"]
+        return _json_sql_type(stat, headroom, "JSON olarak saklanir")
     if kind == "array":
-        return "NVARCHAR(MAX)", ["JSON olarak saklanir"]
+        return _json_sql_type(stat, headroom, "JSON olarak saklanir")
     return nvarchar_width(max(stat.max_utf16, 64), headroom), [f"bilinmeyen tip: {kind}"]
 
 
@@ -490,7 +521,7 @@ def shape_caption(shape: dict[str, Any]) -> str:
 
 
 def _child_table_name(root: str, array_path: str) -> str:
-    return f"{root}_{sql_ident(array_path.replace('[]', '').replace('.', '_'))}"
+    return root + sql_table_ident(array_path)
 
 
 def preview_table_count(nesting: str, shape: dict[str, Any] | None) -> int:
@@ -507,7 +538,7 @@ def preview_tables(
     nesting: str, root_table: str, shape: dict[str, Any] | None
 ) -> tuple[list[str], str]:
     """Approximate SQL tables from a shape peek — not a full plan."""
-    root = sql_ident(root_table) if root_table else "tablo"
+    root = sql_table_ident(root_table) if root_table else "Tablo"
     if nesting == NESTING_COLUMNS:
         return [root], "Üst seviye skalerler kolon; nesne ve diziler JSON."
     if not shape:
@@ -539,6 +570,26 @@ def sql_ident(raw: str) -> str:
         ident = ident + "col" if ident else "col"
     if ident[0].isdigit():
         ident = "c_" + ident
+    return ident[:120]
+
+
+# A run of capitals is one word, so `URLMap` stays `URLMap` instead of `UrlMap`.
+_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[0-9A-Za-z]+")
+
+
+def sql_table_ident(raw: str) -> str:
+    """
+    Table name in PascalCase: `hybrid_conversations` -> `HybridConversations`.
+
+    Columns keep the Mongo field name so they still point back at their source
+    path, but a table name is ours to pick, so it follows one convention
+    regardless of how the collection or array path was spelled.
+    """
+    ident = "".join(word[:1].upper() + word[1:] for word in _WORD.findall(raw))
+    if not ident:
+        return "Table"
+    if ident[0].isdigit():
+        ident = "T" + ident
     return ident[:120]
 
 
@@ -592,8 +643,8 @@ def build_plan(
 ) -> dict[str, Any]:
     if nesting not in {item[0] for item in NESTING_OPTIONS}:
         nesting = NESTING_DEEP
-    root_table = sql_ident(collection)
-    child_prefix = sql_ident(table_prefix) if table_prefix else root_table
+    root_table = sql_table_ident(collection)
+    child_prefix = sql_table_ident(table_prefix) if table_prefix else root_table
     parent_key = parent_key_name(collection)
 
     shape_conflicts = {
@@ -709,7 +760,7 @@ def build_plan(
         array_stat = profile.stats[array_path]
         children.append(
             {
-                "table": f"{child_prefix}_{sql_ident(array_path.replace('[]', '').replace('.', '_'))}",
+                "table": _child_table_name(child_prefix, array_path),
                 "kind": "array",
                 "source": array_path,
                 "parent_key": parent_key,
@@ -725,15 +776,12 @@ def build_plan(
             if map_path not in map_prefixes:
                 continue
             base = sql_ident(map_path.replace("[]", "").replace(".", "_"))
-            value_kinds = set(info["value_types"])
-            value_type = (
-                "NVARCHAR(MAX)"
-                if value_kinds - {"string"}
-                else nvarchar_width(max(info["value_max_utf16"], 170), headroom)
+            value_type = nvarchar_width(
+                max(info["value_max_utf16"], 170), headroom
             )
             children.append(
                 {
-                    "table": f"{child_prefix}_{base}",
+                    "table": _child_table_name(child_prefix, map_path),
                     "kind": "map",
                     "source": map_path,
                     "parent_key": parent_key,

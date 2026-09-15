@@ -18,11 +18,15 @@ from core.inspect import (
     preview_tables,
     profile_collection,
     shape_caption,
-    sql_ident,
+    sql_table_ident,
 )
+from core.logutil import JobLog, get_logger
 from core.mongo import MongoClientWrapper
 from core.mssql import (
     AUTH_NEEDS_PASSWORD,
+    AUTH_SQL,
+    AUTH_WINDOWS,
+    AUTH_WINDOWS_USER,
     MssqlConnection,
     auth_mode,
     available_drivers,
@@ -34,6 +38,13 @@ COLLECTIONS_KEY = "collections"
 SQL_SESSION_PASSWORD = "sql_session_password"
 
 ENCRYPT_CHOICES = ("default", "yes", "no")
+
+# Shared so the Baglantilar form and the sidebar name a mode the same way.
+SQL_AUTH_LABELS = {
+    AUTH_WINDOWS: "Windows — bu oturum",
+    AUTH_SQL: "SQL Server hesabı",
+    AUTH_WINDOWS_USER: "Windows — başka hesap",
+}
 
 
 @dataclass
@@ -113,6 +124,44 @@ def mongo_client(mongo_cfg: dict[str, Any]) -> MongoClientWrapper:
         username=mongo_cfg.get("username") or None,
         password=mongo_cfg.get("password") or None,
     )
+
+
+def _uri_authority(uri: str | None) -> str:
+    """The `user:pass@host` part of a Mongo URI, without scheme, path or options."""
+    text = (uri or "").strip()
+    if not text:
+        return ""
+    authority = text.partition("://")[2] or text
+    return authority.split("/", 1)[0].split("?", 1)[0]
+
+
+def mongo_endpoint(uri: str | None) -> str:
+    """Host(s) a URI points at. Credentials are dropped: this goes on screen."""
+    return _uri_authority(uri).rpartition("@")[2] or "—"
+
+
+def mongo_identity(mongo_cfg: dict[str, Any]) -> str:
+    """Who the connection logs in as, whether that came from the form or the URI."""
+    typed = (mongo_cfg.get("username") or "").strip()
+    if typed:
+        return typed
+    embedded = _uri_authority(mongo_cfg.get("uri")).rpartition("@")[0]
+    if embedded:
+        return embedded.split(":", 1)[0] + " (URI içinde)"
+    return "kimlik yok"
+
+
+def mongo_uri_option(uri: str | None, name: str) -> str | None:
+    """One query option from a Mongo URI (`authSource`, `replicaSet`, …)."""
+    query = (uri or "").partition("?")[2]
+    if not query:
+        return None
+    wanted = name.lower()
+    for part in query.split("&"):
+        key, _, value = part.partition("=")
+        if key.lower() == wanted and value:
+            return value
+    return None
 
 
 def encrypt_flag(raw: Any) -> bool | None:
@@ -239,6 +288,8 @@ def invalidate_collections() -> None:
     st.session_state.pop(PLAN_CACHE_KEY, None)
     st.session_state.pop("field_indexes", None)
     st.session_state.pop(DATE_BOUNDS_KEY, None)
+    st.session_state.pop(RANGE_INDEX_KEY, None)
+    st.session_state.pop(RANGE_INDEX_MISS, None)
 
 
 COUNTS_KEY = "collection_counts"
@@ -355,7 +406,7 @@ def nesting_choice(
     hints = {item[0]: item[2] for item in NESTING_OPTIONS}
     if st.session_state.get(NESTING_KEY) not in allowed:
         st.session_state[NESTING_KEY] = default
-    root = root_table or sql_ident(collection)
+    root = root_table or sql_table_ident(collection)
 
     with st.container(border=True):
         st.markdown(
@@ -461,6 +512,8 @@ def profile_one(
     nesting: str = "deep",
     query: dict[str, Any] | None = None,
 ) -> dict:
+    job = JobLog("profil", collection=name, örnek=sample, sema=schema, nesting=nesting)
+    job.start()
     mongo = mongo_client(settings.mongo)
     try:
         mongo.connect()
@@ -476,9 +529,13 @@ def profile_one(
                 nesting=nesting,
                 query=query,
             )
+        job.done(belgeler=plan.get("documents"))
+        return plan
+    except Exception as exc:
+        get_logger().exception("profil başarısız collection=%s error=%s", name, exc)
+        raise
     finally:
         mongo.close()
-    return plan
 
 
 PLAN_CACHE_KEY = "plan_cache"
@@ -553,20 +610,64 @@ def invalidate_plans() -> None:
 
 
 DATE_BOUNDS_KEY = "date_field_bounds"
+RANGE_INDEX_KEY = "range_index_fields"
+RANGE_INDEX_MISS = "range_index_fields_miss"
+
+
+def range_index_fields(settings: Settings, collection: str) -> set[str] | None:
+    """Leading keys of range indexes on this collection, or None if Mongo did not answer."""
+    if not settings.mongo_ready or not collection:
+        return None
+    cache = st.session_state.setdefault(RANGE_INDEX_KEY, {})
+    if collection in cache:
+        return cache[collection]
+    missed = st.session_state.setdefault(RANGE_INDEX_MISS, set())
+    if collection in missed:
+        return None
+    mongo = mongo_client(settings.mongo)
+    try:
+        mongo.connect()
+        cache[collection] = mongo.leading_range_index_fields(collection)
+        return cache[collection]
+    except Exception:
+        missed.add(collection)
+        return None
+    finally:
+        mongo.close()
 
 
 def date_field_options(settings: Settings, collection: str) -> list[dict[str, Any]]:
-    """Date-typed fields found by the cached shape peek; no extra Mongo read."""
+    """Date-typed fields from the shape peek, tagged and sorted by range-index usability."""
     shape = peek_shape(settings, collection)
     if not shape:
         return []
-    return list(shape.get("date_fields") or [])
+    indexed = range_index_fields(settings, collection)
+    fields: list[dict[str, Any]] = []
+    for raw in shape.get("date_fields") or []:
+        item = dict(raw)
+        path = item.get("path") or ""
+        if indexed is None:
+            item["indexed"] = None
+        else:
+            item["indexed"] = bool(path) and path in indexed
+        fields.append(item)
+
+    def sort_key(item: dict[str, Any]) -> tuple:
+        flag = item.get("indexed")
+        rank = 0 if flag is True else 1 if flag is False else 2
+        return (rank, -(item.get("present") or 0), item.get("path") or "")
+
+    fields.sort(key=sort_key)
+    return fields
 
 
 def date_field_bounds(
     settings: Settings, collection: str, field: str
 ) -> tuple[datetime | None, datetime | None]:
-    """Min/max BSON dates for one field, cached per collection+field this session."""
+    """Min/max BSON dates for one field, cached per collection+field this session.
+
+    Only safe when `field` leads a range index; the caller must skip unindexed fields.
+    """
     if not settings.mongo_ready or not collection or not field:
         return None, None
     cache = st.session_state.setdefault(DATE_BOUNDS_KEY, {})
@@ -584,25 +685,6 @@ def date_field_bounds(
         return None, None
     finally:
         mongo.close()
-
-
-def field_has_index(settings: Settings, collection: str, field: str) -> bool | None:
-    """True/False when Mongo answered, None when the index list is unavailable."""
-    if not settings.mongo_ready or not collection or not field:
-        return None
-    cache = st.session_state.setdefault("field_indexes", {})
-    key = f"{collection}|{field}"
-    if key in cache:
-        return cache[key]
-    mongo = mongo_client(settings.mongo)
-    try:
-        mongo.connect()
-        cache[key] = mongo.has_index_on(collection, field)
-    except Exception:
-        return None
-    finally:
-        mongo.close()
-    return cache[key]
 
 
 def count_matching(

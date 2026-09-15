@@ -20,7 +20,7 @@ from core.inspect import (
     NESTING_HYBRID,
     render_database_ddl,
     render_database_drdl,
-    sql_ident,
+    sql_table_ident,
 )
 
 RESULT_KEYS = ("drdl", "ddl", "plan", "result_name", "result_scope")
@@ -91,7 +91,7 @@ def _pick_collection(settings: Settings, collections: list[str]) -> tuple[str | 
                 "Örnek",
                 min_value=0,
                 value=5000,
-                step=500,
+                step=1000,
                 key="disc_sample",
                 help=(
                     "Şema için kaç belge taransın. 5000 önerilir: hızlı ve tipik şekil için yeterli. "
@@ -137,7 +137,7 @@ def render(settings: Settings) -> None:
     run_collection = False
     if collection:
         st.write("")
-        nesting = nesting_card(settings, collection, sql_ident(collection))
+        nesting = nesting_card(settings, collection, sql_table_ident(collection))
         st.write("")
         run_collection = st.button("Şemayı çıkar", type="primary", width="stretch")
 
@@ -182,14 +182,24 @@ def render(settings: Settings) -> None:
             f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
         )
         if scope == "collection" and "ddl" in st.session_state and "plan" in st.session_state:
-            drdl_tab, ddl_tab, plan_tab = st.tabs(["DRDL", "MSSQL DDL", "Plan"])
-            with drdl_tab:
-                st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")
-                st.code(st.session_state["drdl"], language="yaml")
-            with ddl_tab:
-                st.download_button("DDL indir", st.session_state["ddl"], f"{name}.sql")
+            with st.expander("MSSQL Plan", expanded=False):
+                st.caption("Başlığı tıklayınca SQL açılır; tekrar tıklayınca kapanır.")
+                st.download_button(
+                    "DDL indir",
+                    st.session_state["ddl"],
+                    f"{name}.sql",
+                    key="disc_ddl_download",
+                )
                 st.code(st.session_state["ddl"], language="sql")
-            with plan_tab:
+            with st.expander("DRDL", expanded=True):
+                st.download_button(
+                    "DRDL indir",
+                    st.session_state["drdl"],
+                    f"{name}.drdl",
+                    key="disc_drdl_download",
+                )
+                st.code(st.session_state["drdl"], language="yaml")
+            with st.expander("Plan", expanded=False):
                 st.json(st.session_state["plan"], expanded=False)
         else:
             st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")

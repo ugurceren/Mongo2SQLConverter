@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
+
+from bson import json_util
 
 # Astral-plane emoji + flags + variation selectors / ZWJ.
 # BMP ranges (U+2600-U+27BF) are deliberately excluded: they also hold
@@ -50,6 +53,14 @@ def safe_console(text: str) -> str:
 def utf16_len(text: str) -> int:
     """NVARCHAR(n) counts UTF-16 code units; astral chars occupy two."""
     return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
+
+
+def json_text(value: Any) -> str:
+    """Serialize a nested value the same way transfer writes JSON columns."""
+    try:
+        return json_util.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return json.dumps(value, default=str, ensure_ascii=False)
 
 
 def clip_utf16(text: str, max_units: int) -> str:
