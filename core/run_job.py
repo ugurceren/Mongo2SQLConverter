@@ -25,7 +25,9 @@ from core.settings import (
 from core.transfer import (
     TransferStats,
     apply_column_selection,
+    apply_table_names,
     ensure_tables,
+    plan_tables,
     read_root_watermark,
     relax_nullability,
     retarget_plan,
@@ -134,8 +136,15 @@ def run_transfer_job(
     mode: str | None = None,
     batch: int | None = None,
     sample: int | None = None,
+    table: str | None = None,
+    schema: str | None = None,
+    table_names: dict[str, str] | None = None,
 ) -> JobResult:
-    """Profile and write one collection using `config.local.yaml` prefs."""
+    """Profile and write one collection using `config.local.yaml` prefs.
+
+    `--table` / `--rename` from a downloaded bat pin the SQL tables for that
+    job so another collection's UI edits cannot redirect it.
+    """
     name = (collection or "").strip()
     if not name:
         raise ValueError("Koleksiyon adı boş.")
@@ -145,6 +154,14 @@ def run_transfer_job(
     mssql_cfg = cfg.get("mssql") or {}
     profiler = cfg.get("profiler") or {}
     prefs = load_transfer_prefs(name)
+    pinned = bool((table or "").strip())
+    if pinned:
+        prefs["table"] = str(table).strip()
+        prefs["table_names"] = dict(table_names or {})
+    elif table_names is not None:
+        prefs["table_names"] = dict(table_names)
+    if (schema or "").strip():
+        prefs["schema"] = str(schema).strip()
 
     if not (mongo_cfg.get("uri") and mongo_cfg.get("database")):
         raise RuntimeError("Mongo bağlantısı config.local.yaml içinde yok.")
@@ -182,7 +199,7 @@ def run_transfer_job(
         date_query = date_query_from_filter(write_dates)
 
         log.info(
-            "görev başladı collection=%s istenen=%s mod=%s tablo=%s.%s parti=%s örnek=%s",
+            "görev başladı collection=%s istenen=%s mod=%s tablo=%s.%s parti=%s örnek=%s kilitli=%s",
             name,
             requested,
             resolved,
@@ -190,6 +207,7 @@ def run_transfer_job(
             table,
             write_batch,
             profile_sample,
+            pinned,
         )
         _, plan = profile_collection(
             source,
@@ -207,6 +225,12 @@ def run_transfer_job(
             plan = relax_nullability(plan)
         plan = apply_column_selection(
             plan, columns["exclude"], columns["exclude_tables"]
+        )
+        plan = apply_table_names(plan, prefs.get("table_names"))
+        log.info(
+            "aktarım hedefleri collection=%s tablolar=%s",
+            name,
+            ", ".join(plan_tables(plan)),
         )
 
         created, existing = ensure_tables(target, plan, recreate=False)

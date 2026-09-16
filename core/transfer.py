@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterator, Sequence
 from bson import Binary, Decimal128, ObjectId
 
 from core.inspect import ddl_statements, key_column_type, sql_table_ident
-from core.logutil import JobLog
+from core.logutil import JobLog, get_logger
 from core.mongo import MongoClientWrapper, encode_mongo_id, encode_resume_id
 from core.mssql import MssqlConnection
 from core.textutil import clip_utf16, json_text, utf16_len
@@ -65,6 +65,34 @@ def retarget_plan(
 
 def plan_tables(plan: dict[str, Any]) -> list[str]:
     return [plan["root"]["table"], *(child["table"] for child in plan["children"])]
+
+
+def apply_table_names(plan: dict[str, Any], names: dict[str, str] | None) -> dict[str, Any]:
+    """
+    Override generated SQL table names.
+
+    `names` is keyed by Mongo source: `""` is the root table, child tables use
+    `child["source"]`. Empty values keep the generated name. Values are passed
+    through `sql_table_ident` so they stay valid SQL identifiers.
+    """
+    if not names:
+        return plan
+    out = dict(plan)
+    root = dict(plan["root"])
+    custom_root = str(names.get("") or "").strip()
+    if custom_root:
+        root["table"] = sql_table_ident(custom_root)
+    out["root"] = root
+
+    children = []
+    for child in plan["children"]:
+        renamed = dict(child)
+        custom = str(names.get(child["source"]) or "").strip()
+        if custom:
+            renamed["table"] = sql_table_ident(custom)
+        children.append(renamed)
+    out["children"] = children
+    return out
 
 
 def watermark_from_sql_value(value: Any) -> dict[str, str] | None:
@@ -539,6 +567,89 @@ def child_columns(child: dict[str, Any]) -> list[str]:
     ]
 
 
+def plan_column_specs(plan: dict[str, Any]) -> list[tuple[str, list[tuple[str, str]]]]:
+    """(table, [(column, sql_type), ...]) for every table the plan will write."""
+    key_type = key_column_type(plan)
+    specs: list[tuple[str, list[tuple[str, str]]]] = []
+    root_cols = [
+        (
+            column["name"],
+            key_type if column["name"] == "mongo_id" else column["sql_type"],
+        )
+        for column in plan["root"]["columns"]
+    ]
+    specs.append((plan["root"]["table"], root_cols))
+    for child in plan["children"]:
+        cols: list[tuple[str, str]] = [(child["parent_key"], key_type)]
+        if child["kind"] == "map":
+            cols.append((child["key_column"]["name"], child["key_column"]["sql_type"]))
+            cols.append((child["value_column"]["name"], child["value_column"]["sql_type"]))
+        else:
+            for name in child["idx_columns"]:
+                cols.append((name, "INT"))
+            for column in child["columns"]:
+                cols.append((column["name"], column["sql_type"]))
+        specs.append((child["table"], cols))
+    return specs
+
+
+def _add_missing_columns(target: MssqlConnection, plan: dict[str, Any]) -> list[str]:
+    """
+    A later profile can see fields the first CREATE TABLE did not.
+
+    INSERT uses the current plan, so a new Mongo field such as `values` is 207
+    unless this table is widened. New columns are nullable so existing rows stay
+    valid. Only the plan's own tables are touched.
+    """
+    schema = plan["schema"]
+    added: list[str] = []
+    for table, columns in plan_column_specs(plan):
+        live = target.column_names(schema, table)
+        if not live:
+            continue
+        folded = {name.lower() for name in live}
+        for name, sql_type in columns:
+            if name in live or name.lower() in folded:
+                continue
+            target.add_column(schema, table, name, sql_type, nullable=True)
+            added.append(f"{table}.{name}")
+    return added
+
+
+def _drop_missing_live_columns(target: MssqlConnection, plan: dict[str, Any]) -> dict[str, Any]:
+    """Keep only columns that exist on the destination, so INSERT cannot 207."""
+    schema = plan["schema"]
+    live_root = target.column_names(schema, plan["root"]["table"])
+    if not live_root:
+        return plan
+    folded_root = {name.lower() for name in live_root}
+    out = dict(plan)
+    root = dict(plan["root"])
+    root["columns"] = [
+        column
+        for column in plan["root"]["columns"]
+        if column["name"] in live_root or column["name"].lower() in folded_root
+    ]
+    out["root"] = root
+    children = []
+    for child in plan["children"]:
+        live = target.column_names(schema, child["table"])
+        if not live:
+            children.append(child)
+            continue
+        folded = {name.lower() for name in live}
+        renamed = dict(child)
+        if child["kind"] != "map":
+            renamed["columns"] = [
+                column
+                for column in child["columns"]
+                if column["name"] in live or column["name"].lower() in folded
+            ]
+        children.append(renamed)
+    out["children"] = children
+    return out
+
+
 # --------------------------------------------------------------------------
 # table creation
 # --------------------------------------------------------------------------
@@ -565,6 +676,9 @@ def ensure_tables(
             continue
         target.execute(sql)
         created.append(table)
+    added = _add_missing_columns(target, plan)
+    if added:
+        get_logger().info("aktarım kolon eklendi kolonlar=%s", ", ".join(added))
     return created, existing
 
 
@@ -595,6 +709,7 @@ def transfer_collection(
     Documents are read in `_id` order so the watermark is the last written id.
     """
     plan = bind_plan_to_tables(target, plan)
+    plan = _drop_missing_live_columns(target, plan)
     schema = plan["schema"]
     root_table = plan["root"]["table"]
     key_type = key_column_type(plan)

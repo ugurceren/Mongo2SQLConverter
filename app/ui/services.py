@@ -364,6 +364,10 @@ SHAPE_KEY = "shape_peek"
 PEEK_SAMPLE = 5000
 
 
+def nesting_widget_key(collection: str | None) -> str:
+    return f"{NESTING_KEY}_{collection or 'none'}"
+
+
 def peek_shape(settings: Settings, collection: str) -> dict[str, Any] | None:
     """Cheap sample profile so nesting options match this collection."""
     cache = st.session_state.setdefault(SHAPE_KEY, {})
@@ -404,8 +408,9 @@ def nesting_choice(
     allowed, default = nesting_keys_for(shape)
     titles = {item[0]: item[1] for item in NESTING_OPTIONS}
     hints = {item[0]: item[2] for item in NESTING_OPTIONS}
-    if st.session_state.get(NESTING_KEY) not in allowed:
-        st.session_state[NESTING_KEY] = default
+    state_key = nesting_widget_key(collection)
+    if st.session_state.get(state_key) not in allowed:
+        st.session_state[state_key] = default
     root = root_table or sql_table_ident(collection)
 
     with st.container(border=True):
@@ -421,8 +426,8 @@ def nesting_choice(
         cols = st.columns(2)
         picked: str | None = None
         for i, key in enumerate(allowed):
-            selected = st.session_state[NESTING_KEY] == key
-            wrap = f"nest_on_{key}" if selected else f"nest_off_{key}"
+            selected = st.session_state[state_key] == key
+            wrap = f"nest_on_{collection}_{key}" if selected else f"nest_off_{collection}_{key}"
             tables, note = preview_tables(key, root, shape)
             shown = tables[:8]
             extra = f"\n+{len(tables) - 8} daha" if len(tables) > 8 else ""
@@ -445,16 +450,84 @@ def nesting_choice(
                         "Seçildi" if selected else "Bunu kullan",
                         type="primary" if selected else "secondary",
                         width="stretch",
-                        key=f"nest_pick_{key}",
+                        key=f"nest_pick_{collection}_{key}",
                     ):
                         picked = key
-        if picked and picked != st.session_state[NESTING_KEY]:
-            st.session_state[NESTING_KEY] = picked
+        if picked and picked != st.session_state[state_key]:
+            st.session_state[state_key] = picked
             st.rerun()
-    return st.session_state[NESTING_KEY]
+    return st.session_state[state_key]
 
 
 nesting_card = nesting_choice
+
+
+def table_names_editor(
+    plan: dict[str, Any],
+    overrides: dict[str, str],
+    *,
+    editor_key: str,
+) -> tuple[str, dict[str, str], list[str]]:
+    """
+    Let the user rename generated SQL tables.
+
+    Returns (root_table, child_overrides, duplicate_names). Child overrides are
+    keyed by Mongo source path and only kept when they differ from the generated
+    name, so a later kök-tablo rename still updates untouched children.
+    """
+    generated_root = plan["root"]["table"]
+    rows = [
+        {
+            "kaynak": "(kök tablo)",
+            "üretilen": generated_root,
+            "sql_adı": generated_root,
+        }
+    ]
+    paths = [""]
+    for child in plan["children"]:
+        generated = child["table"]
+        custom = str(overrides.get(child["source"]) or "").strip()
+        rows.append(
+            {
+                "kaynak": child["source"],
+                "üretilen": generated,
+                "sql_adı": sql_table_ident(custom) if custom else generated,
+            }
+        )
+        paths.append(child["source"])
+
+    edited = st.data_editor(
+        rows,
+        key=editor_key,
+        hide_index=True,
+        width="stretch",
+        num_rows="fixed",
+        column_config={
+            "kaynak": st.column_config.TextColumn("kaynak", width="medium"),
+            "üretilen": st.column_config.TextColumn("üretilen", width="medium"),
+            "sql_adı": st.column_config.TextColumn("SQL adı", width="medium"),
+        },
+        disabled=("kaynak", "üretilen"),
+    )
+    edited_rows = edited if isinstance(edited, list) else edited.to_dict("records")
+
+    new_root = generated_root
+    new_overrides: dict[str, str] = {}
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+    for path, original, entry in zip(paths, rows, edited_rows):
+        raw = str(entry.get("sql_adı") or original["üretilen"]).strip()
+        name = sql_table_ident(raw)
+        folded = name.lower()
+        if folded in seen:
+            duplicates.append(name)
+            continue
+        seen[folded] = path
+        if path == "":
+            new_root = name
+        elif name != original["üretilen"]:
+            new_overrides[path] = name
+    return new_root, new_overrides, duplicates
 
 
 # --------------------------------------------------------------------------

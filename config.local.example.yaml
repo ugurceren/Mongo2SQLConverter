@@ -40,3 +40,5 @@ transfer:
     batch: 500
     sample: 5000             # profil ornegi; 0 = tam tarama
     allow_null: true
+    table_names:             # uretilen adin ustune yazilan SQL tablo adlari
+      "messages[]": ConvMessages

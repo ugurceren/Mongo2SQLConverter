@@ -25,7 +25,8 @@ from app.ui.services import (
     remember_collection,
     sql_table_watermark,
     stored_plan,
-    NESTING_KEY,
+    table_names_editor,
+    nesting_widget_key,
 )
 from core.inspect import nesting_labels, render_database_ddl, sql_table_ident
 from core.logutil import log_path_display
@@ -39,6 +40,7 @@ from core.settings import (
 )
 from core.transfer import (
     apply_column_selection,
+    apply_table_names,
     plan_column_rows,
     plan_tables,
 )
@@ -70,6 +72,7 @@ def _defaults(settings: Settings) -> dict:
         "nesting": "hybrid",
         "date_filter": default_transfer_prefs()["date_filter"],
         "columns": default_transfer_prefs()["columns"],
+        "table_names": {},
     }
 
 
@@ -88,7 +91,7 @@ def _prefs(collection: str | None) -> dict:
         st.session_state[PREFS_STAMP] = collection
         # Snapshot what is already on disk so simply opening a collection does
         # not rewrite the file.
-        st.session_state[SAVED_PREFS_KEY] = repr(prefs)
+        st.session_state[f"{SAVED_PREFS_KEY}:{collection}"] = repr(prefs)
         st.session_state.pop(EXCLUDE_KEY, None)
         _apply_prefs_widgets(prefs, collection)
     return st.session_state[PREFS_KEY]
@@ -96,15 +99,16 @@ def _prefs(collection: str | None) -> dict:
 
 def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
     """Seed widgets when the selected collection changes."""
-    if prefs.get("schema"):
-        st.session_state["tr_schema"] = prefs["schema"]
+    st.session_state[f"tr_schema_{collection}"] = prefs.get("schema") or st.session_state.get(
+        f"tr_schema_{collection}", ""
+    )
     table_key = f"tr_table_{collection}"
     st.session_state[table_key] = prefs.get("table") or sql_table_ident(collection)
-    st.session_state["tr_sample"] = int(prefs.get("sample") or 5000)
-    st.session_state["tr_batch"] = int(prefs.get("batch") or 500)
-    st.session_state["tr_null"] = bool(prefs.get("allow_null", True))
+    st.session_state[f"tr_sample_{collection}"] = int(prefs.get("sample") or 5000)
+    st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 500)
+    st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
     if prefs.get("nesting"):
-        st.session_state[NESTING_KEY] = prefs["nesting"]
+        st.session_state[nesting_widget_key(collection)] = prefs["nesting"]
 
 
 def _job_prefs(options: dict) -> dict:
@@ -118,23 +122,25 @@ def _job_prefs(options: dict) -> dict:
         "batch": int(options.get("batch") or 500),
         "sample": int(options["sample"]) if options.get("sample") is not None else 5000,
         "allow_null": bool(options.get("allow_null", True)),
+        "table_names": dict(options.get("table_names") or {}),
     }
 
 
 def _remember_prefs(collection: str | None, options: dict) -> None:
     """Write the current choices to config.local.yaml, but only when they change."""
-    if not collection:
+    if not collection or st.session_state.get(PREFS_STAMP) != collection:
         return
     prefs = _job_prefs(options)
     snapshot = repr(prefs)
-    if st.session_state.get(SAVED_PREFS_KEY) == snapshot:
+    saved_key = f"{SAVED_PREFS_KEY}:{collection}"
+    if st.session_state.get(saved_key) == snapshot:
         return
     try:
         save_transfer_prefs(collection, prefs)
     except OSError as exc:
         st.caption(f"Tercihler kaydedilemedi: {exc}")
         return
-    st.session_state[SAVED_PREFS_KEY] = snapshot
+    st.session_state[saved_key] = snapshot
     st.session_state[PREFS_KEY] = prefs
 
 
@@ -453,6 +459,8 @@ def _columns_card(
     collection = options["collection"]
     state = _exclusions(collection, _prefs(collection))
     plan = stored_plan(options, query)
+    if plan is not None:
+        plan = apply_table_names(plan, options.get("table_names") or {})
 
     with st.container(border=True):
         theme.card_title("Kolonlar", "Aktarılacak kolonları ve alt tabloları seçin.")
@@ -527,7 +535,7 @@ def _columns_card(
         ]
         # The plan's own shape is part of the key too: a re-profile can produce
         # a different set of columns.
-        shape_id = abs(hash(tuple(row["path"] for row in rows))) % 10**8
+        shape_id = abs(hash(tuple((row["path"], row["table"]) for row in rows))) % 10**8
         nonce = st.session_state.get(EDITOR_NONCE, 0)
         with st.container(key="tr_cols_grid"):
             edited = st.data_editor(
@@ -614,13 +622,20 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         remember_collection(collection)
         prefs = _prefs(collection) if collection else default_transfer_prefs()
         with row[1]:
-            schema = st.text_input("Hedef şema", value=settings.schema, key="tr_schema")
+            schema_key = f"tr_schema_{collection or 'none'}"
+            if collection and schema_key not in st.session_state:
+                st.session_state[schema_key] = prefs.get("schema") or settings.schema
+            schema = st.text_input(
+                "Hedef şema",
+                key=schema_key,
+                disabled=not collection,
+            )
         with row[2]:
             table = st.text_input(
                 "Kök tablo",
                 key=f"tr_table_{collection or 'none'}",
                 disabled=not collection,
-                help="PascalCase yazılır. Alt tablolar bu addan türer: <Ad><Alan>.",
+                help="PascalCase yazılır. Alt tablolar bu addan türer; her tabloyu Plan kartından ayrıca adlandırabilirsiniz.",
             )
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
@@ -650,7 +665,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "Senkron",
             ("Tam senkron", "Artımlı"),
             horizontal=True,
-            key="tr_sync_kind",
+            key=f"tr_sync_{collection}",
             help="Tam: tüm belgeler. Artımlı: SQL tablosundaki son `_id` sonrası yeni kayıtlar.",
         )
         incremental = mode == "Artımlı"
@@ -696,9 +711,8 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             sample = st.number_input(
                 "Profil örneği",
                 min_value=0,
-                value=5000,
                 step=1000,
-                key="tr_sample",
+                key=f"tr_sample_{collection}",
                 help=(
                     "Şema için kaç belge taransın. 5000 önerilir. "
                     "0 = koleksiyonun tamamı. Aktarılacak belge sayısını değiştirmez."
@@ -708,9 +722,8 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             batch = st.number_input(
                 "Yazma partisi",
                 min_value=100,
-                value=500,
                 step=100,
-                key="tr_batch",
+                key=f"tr_batch_{collection}",
                 help=(
                     "SQL'e bir seferde kaç belgelik paket yazılsın. "
                     "Hızı ve belleği etkiler; aktarılacak belge sayısını değiştirmez."
@@ -719,20 +732,20 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         with row2[2]:
             recreate = st.checkbox(
                 "Tabloları yeniden oluştur (DROP + CREATE)",
-                key="tr_recreate",
+                key=f"tr_recreate_{collection}",
                 disabled=incremental,
                 help="Artımlı modda şema durur; yalnızca yeni satırlar yazılır.",
             )
             clear_first = st.checkbox(
                 "Yazmadan önce tabloları boşalt",
-                key="tr_clear",
+                key=f"tr_clear_{collection}",
                 disabled=incremental,
                 help="Hedef tablolardaki mevcut satırlar silinir, sonra aktarım başlar.",
             )
             allow_null = st.checkbox(
                 "Anahtar dışındaki kolonlar NULL kabul etsin",
                 value=True,
-                key="tr_null",
+                key=f"tr_null_{collection}",
                 help="Örnekle profillenen alanlar başka belgelerde eksik olabilir.",
             )
         st.caption(
@@ -752,6 +765,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "mode": "incremental" if incremental else "full",
             "schedule_mode": prefs.get("schedule_mode") or "auto",
             "watermark": watermark,
+            "table_names": dict(prefs.get("table_names") or {}),
         }
     )
     return options
@@ -786,6 +800,7 @@ def _run_signature(options: dict) -> str:
             repr(options.get("date_filter")),
             repr(sorted(columns.get("exclude") or [])),
             repr(sorted(columns.get("exclude_tables") or [])),
+            repr(sorted((options.get("table_names") or {}).items())),
         )
     )
 
@@ -809,23 +824,54 @@ def _range_note(date_filter: dict[str, Any]) -> str:
     return f" · {date_filter['field']} {start:%d.%m.%Y}–{end:%d.%m.%Y}"
 
 
-def _scheduler_command(collection: str, mode: str) -> tuple[str, str, str]:
+def _quote_cmd(arg: str) -> str:
+    """Quote a Windows cmd.exe argument when it is not a plain token."""
+    if arg and not any(ch.isspace() or ch in '&()[]{}^=;!\'+,`~%' for ch in arg):
+        return arg
+    return '"' + arg.replace('"', '""') + '"'
+
+
+def _quote_ps(arg: str) -> str:
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def _scheduler_args(
+    collection: str, mode: str, schema: str, table: str, table_names: dict[str, str]
+) -> list[str]:
+    args = ["--collection", collection, "--mode", mode]
+    if schema:
+        args += ["--schema", schema]
+    if table:
+        args += ["--table", table]
+    for source, name in sorted((table_names or {}).items()):
+        args += ["--rename", f"{source}={name}"]
+    return args
+
+
+def _scheduler_command(
+    collection: str,
+    mode: str,
+    schema: str,
+    table: str,
+    table_names: dict[str, str],
+) -> tuple[str, str, str]:
     """Return (one-line command, PowerShell script, batch script)."""
     python = sys.executable
     script = ROOT / "tools" / "run_transfer.py"
-    cmdline = f'"{python}" "{script}" --collection {collection} --mode {mode}'
-    if any(ch.isspace() for ch in collection):
-        cmdline = f'"{python}" "{script}" --collection "{collection}" --mode {mode}'
+    extra = _scheduler_args(collection, mode, schema, table, table_names)
+    cmd_args = " ".join(_quote_cmd(part) for part in extra)
+    ps_args = " ".join(_quote_ps(part) for part in extra)
+    cmdline = f'"{python}" "{script}" {cmd_args}'
     ps1 = (
         "$ErrorActionPreference = 'Stop'\n"
         f"Set-Location -LiteralPath '{ROOT}'\n"
-        f"& '{python}' '{script}' --collection '{collection}' --mode {mode}\n"
+        f"& '{python}' '{script}' {ps_args}\n"
         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
     )
     bat = (
         "@echo off\n"
         f"cd /d \"{ROOT}\"\n"
-        f"\"{python}\" \"{script}\" --collection {collection} --mode {mode}\n"
+        f"\"{python}\" \"{script}\" {cmd_args}\n"
         "exit /b %ERRORLEVEL%\n"
     )
     return cmdline, ps1, bat
@@ -836,16 +882,23 @@ def _scheduler_card(options: dict) -> None:
     if not collection:
         return
     mode = options.get("schedule_mode") or "auto"
-    cmdline, ps1, bat = _scheduler_command(collection, mode)
+    schema = options.get("schema") or ""
+    table = options.get("table") or ""
+    table_names = dict(options.get("table_names") or {})
+    cmdline, ps1, bat = _scheduler_command(collection, mode, schema, table, table_names)
     with st.container(border=True):
         theme.card_title(
             "Zamanla",
             "Windows Görev Zamanlayıcı bu komutu çalıştırır. "
-            "İlk koşu boş tabloda tam senkron, sonrakiler artımlı (`auto`).",
+            "Komut bu koleksiyonun kök tablosuna kilitlenir; başka koleksiyonun adları karışmaz.",
         )
         st.code(cmdline, language="text")
+        targets = table or sql_table_ident(collection)
+        extra = ", ".join(f"{path}→{name}" for path, name in sorted(table_names.items()))
         st.caption(
-            f"Başlangıç dizini `{ROOT}`. Windows kimliği için görevi oturum açmış "
+            f"Hedef `{schema}.{targets}`"
+            + (f" · {extra}" if extra else "")
+            + f". Başlangıç dizini `{ROOT}`. Windows kimliği için görevi oturum açmış "
             "kullanıcıyla çalıştırın. SQL şifresi gerekiyorsa `config.local.yaml` içinde olmalı."
         )
         row = st.columns(2)
@@ -855,7 +908,7 @@ def _scheduler_card(options: dict) -> None:
                 ps1,
                 file_name=f"mongo2sql_{collection}.ps1",
                 mime="text/plain",
-                key="tr_sched_ps1",
+                key=f"tr_sched_ps1_{collection}",
                 width="stretch",
             )
         with row[1]:
@@ -864,23 +917,46 @@ def _scheduler_card(options: dict) -> None:
                 bat,
                 file_name=f"mongo2sql_{collection}.bat",
                 mime="text/plain",
-                key="tr_sched_bat",
+                key=f"tr_sched_bat_{collection}",
                 width="stretch",
             )
 
 
-def _plan_summary(settings: Settings, plan: dict, options: dict) -> None:
-    tables = plan_tables(plan)
+def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
+    """Rename generated SQL tables. Returns the plan with those names applied."""
+    collection = options["collection"]
+    overrides = dict(options.get("table_names") or {})
+    shape = (plan["root"]["table"], tuple(child["source"] for child in plan["children"]))
+    editor_key = f"tr_tables_{collection}_{abs(hash(shape)) % 10**8}"
+    table_count = 1 + len(plan["children"])
     mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
     nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
     with st.container(border=True):
         theme.card_title(
             "Plan",
             f"<code>{settings.mssql.get('database')}</code> · "
-            f"<code>{plan['schema']}</code> — {len(tables)} tablo · {mode_label} · "
+            f"<code>{plan['schema']}</code> — {table_count} tablo · {mode_label} · "
             f"{nesting_title}{_range_note(options['date_filter'])}",
         )
-        st.code("\n".join(tables), language="text")
+        new_root, new_overrides, duplicates = table_names_editor(
+            plan, overrides, editor_key=editor_key
+        )
+        st.caption(
+            "SQL adı kolonunu düzenleyin. Boş bırakılan alt tablolar kök addan türemeye devam eder. "
+            "Adlar PascalCase'e çevrilir; aynı isim iki tabloda kullanılamaz."
+        )
+        if duplicates:
+            st.warning(
+                "Bu adlar birden fazla tabloda yazıldı, ikincisi yok sayıldı: "
+                + ", ".join(duplicates)
+            )
+    options["table_names"] = new_overrides
+    if new_root != options["table"]:
+        st.session_state[f"tr_table_{collection}"] = new_root
+        options["table"] = new_root
+        _remember_prefs(collection, options)
+        st.rerun()
+    return apply_table_names(plan, new_overrides)
 
 
 def _mongo_cfg(settings: Settings) -> dict[str, Any]:
@@ -1074,16 +1150,20 @@ def render(settings: Settings) -> None:
         _, options["columns"] = _columns_card(
             settings, options, _date_query(options["date_filter"])
         )
-        _remember_prefs(options["collection"], options)
 
     selected = None
     if plan is not None:
         selected = apply_column_selection(
             plan, options["columns"]["exclude"], options["columns"]["exclude_tables"]
         )
+        st.write("")
+        selected = _tables_card(settings, options, selected)
         st.session_state[PLAN_KEY] = selected
     else:
         st.session_state.pop(PLAN_KEY, None)
+
+    if options["collection"]:
+        _remember_prefs(options["collection"], options)
 
     job = transfer_job.snapshot()
     _consume_finished_job(job)
@@ -1132,10 +1212,6 @@ def render(settings: Settings) -> None:
                 st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
 
     _launch_if_requested(settings, options, selected)
-
-    if selected is not None:
-        st.write("")
-        _plan_summary(settings, selected, options)
 
     if options.get("collection"):
         st.write("")

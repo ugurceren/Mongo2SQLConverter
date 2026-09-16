@@ -69,14 +69,20 @@ python tools/run_transfer.py --collection conversations --mode auto
 
 `--mode auto` (varsayılan kayıtlı tercih): hedef kök tablo yoksa veya boşsa **tam senkron**, tabloda satır varsa **artımlı** (`mongo_id` son `_id`'den büyük). Tek Windows görevi yeter; iki ayrı görev gerekmez.
 
+İndirilen `.bat` / `.ps1` `--collection` ile birlikte `--table` (kök SQL tablosu) ve varsa `--rename yol=Tablo` taşır. Görev bu tablolara kilitlenir; uygulamada başka koleksiyon seçmek veya o koleksiyonun adını sonradan değiştirmek eski dosyayı etkilemez. Eski stil (yalnız `--collection`) hâlâ `config.local.yaml` kaydını okur.
+
+```powershell
+python tools/run_transfer.py --collection conversations --mode auto --schema dbo --table Conversations --rename "messages[]=ConvMessages"
+```
+
 `--mode full` tabloyu yeniden doldurur. `--mode incremental` her zaman artımlıdır (işaret yoksa yine tüm belgeleri okur).
 
 Bağlantı ve job ayarları `config.local.yaml` içindedir (koleksiyon başına `nesting`, `table`, `schema`, `schedule_mode`, `batch`, `sample`, kolon ve tarih tercihleri). SQL şifresi gerekiyorsa dosyada olmalı; Streamlit oturum şifresi CLI'da yoktur.
 
 **Windows Görev Zamanlayıcı:**
 
-1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin.
-2. Görev Zamanlayıcı → Görev Oluştur. Eylem: Program `python.exe` (venv), argümanlar `tools\run_transfer.py --collection <ad> --mode auto`, başlangıç dizini proje klasörü.
+1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin. Dosya adı `mongo2sql_<koleksiyon>.bat`; içinde `--table` o koleksiyonun kök tablosudur.
+2. Görev Zamanlayıcı → Görev Oluştur. Eylem: indirilen `.bat`, ya da Program `python.exe` (venv) ve karttaki tam argüman satırı. Başlangıç dizini proje klasörü.
 3. **Windows — bu oturum** kimliği için görevi o Windows kullanıcısıyla ve "kullanıcı oturum açmış olsun" ile çalıştırın (Trusted Connection oturuma bağlıdır).
 4. Çıkış kodu 0 başarı, 1 hata. Ayrıntı `logs/mongo2sql.log`.
 
@@ -96,7 +102,7 @@ Tablo adlari **PascalCase** uretilir: `hybrid_conversations` koleksiyonu `Hybrid
 
 **Kolon adlari degismez.** Mongo alan adi neyse kolon adi odur (`createdAt` -> `createdAt`), boylece kolona bakip hangi alandan geldigi anlasilir.
 
-Kok tablo adini **SQL aktarimi** sayfasindaki **Kok tablo** kutusundan degistirebilirsiniz; ne yazarsaniz yazin PascalCase'e cevrilir ve alt tablolar o ada gore yeniden adlandirilir.
+Kok tablo adini **SQL aktarimi** sayfasindaki **Kok tablo** kutusundan ya da **Tablo adlari** listesinden degistirebilirsiniz; ne yazarsaniz yazin PascalCase'e cevrilir. Alt tablolar varsayilan olarak o ada gore yeniden adlandirilir (`Conversations` + `messages` -> `ConversationsMessages`). Liste icindeki **SQL adi** kolonundan her tabloyu ayri ayri yazabilirsiniz; uretilen ada esit birakanlar kok degisince yeniden turer. Ozel adlar `config.local.yaml` icinde koleksiyon basina `table_names` olarak saklanir. Zamanlanan `.bat` / `.ps1` indirme anindaki tablo adlarini `--table` / `--rename` olarak gomdugu icin her gorev kendi tablosuna yazar.
 
 Onceki surumler `conversations_messages` gibi adlar uretiyordu. Eski adlarla olusmus tablolariniz varsa yeni adlar ayri tablolar olur; eskilerini elle yeniden adlandirin ya da birakin.
 
@@ -114,7 +120,7 @@ Aralik yalnizca yazmayi degil profillemeyi de daraltir, boylece kolon genislikle
 
 **Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden gelir; koleksiyon ve kok tablo secildigi anda profil otomatik cikarilir.
 
-Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir. Ayni kayda kirilim, kok tablo, sema, yazma partisi ve `schedule_mode` da eklenir; CLI / Gorev Zamanlayici bunlari okur.
+Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir. Ayni kayda kirilim, kok tablo, sema, yazma partisi, `table_names` ve `schedule_mode` da eklenir; CLI / Gorev Zamanlayici bunlari okur.
 
 **Dikkat:** Artimli senkron ile tarih araligini birlikte kullanirken belgeler `_id` sirasiyla okunur ve isaret yalnizca filtreden gecen son belgeye ilerler; aralik disinda kalan daha buyuk `_id`'ler sonraki kosularda bir daha okunmaz. Donem bazli yukleme icin tam senkron daha guvenlidir.
 

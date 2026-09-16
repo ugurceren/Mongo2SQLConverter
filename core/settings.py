@@ -143,6 +143,35 @@ def _as_int(value: Any, default: int, minimum: int = 0) -> int:
     return max(minimum, number)
 
 
+def _as_name_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, name in value.items():
+        text = str(name or "").strip()
+        if text:
+            out[str(key)] = text
+    return out
+
+
+def parse_table_renames(items: list[str] | None) -> dict[str, str]:
+    """Parse `--rename path=SqlName` flags into a table_names map."""
+    if not items:
+        return {}
+    out: dict[str, str] = {}
+    for item in items:
+        text = str(item or "").strip()
+        if not text or "=" not in text:
+            raise ValueError(
+                f"Geçersiz --rename {item!r}; `mongoYolu=SqlTablo` beklenir."
+            )
+        source, _, name = text.partition("=")
+        name = name.strip()
+        if name:
+            out[source.strip()] = name
+    return out
+
+
 def _as_schedule_mode(value: Any) -> str:
     text = str(value or "auto").strip().lower()
     return text if text in SCHEDULE_MODES else "auto"
@@ -165,6 +194,7 @@ def default_transfer_prefs() -> dict[str, Any]:
         "batch": 500,
         "sample": 5000,
         "allow_null": True,
+        "table_names": {},
     }
 
 
@@ -209,6 +239,7 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
     prefs["sample"] = _as_int(stored.get("sample"), 5000, 0)
     if "allow_null" in stored:
         prefs["allow_null"] = bool(stored.get("allow_null"))
+    prefs["table_names"] = _as_name_map(stored.get("table_names"))
     return prefs
 
 
@@ -243,6 +274,7 @@ def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
         "batch": _as_int(prefs.get("batch"), defaults["batch"], 100),
         "sample": _as_int(prefs.get("sample"), defaults["sample"], 0),
         "allow_null": bool(prefs["allow_null"]) if "allow_null" in prefs else True,
+        "table_names": _as_name_map(prefs.get("table_names")),
     }
     local["transfer"] = transfer
     return _write_local(local)

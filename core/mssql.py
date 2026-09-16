@@ -297,6 +297,36 @@ class MssqlConnection:
         )
         self.conn.commit()
 
+    def column_names(self, schema: str, table: str) -> set[str]:
+        """Physical column names on an existing table. Missing tables: empty set."""
+        if not self.table_exists(schema, table):
+            return set()
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT c.name "
+            "FROM sys.columns c "
+            "JOIN sys.tables tb ON tb.object_id = c.object_id "
+            "JOIN sys.schemas s ON s.schema_id = tb.schema_id "
+            "WHERE s.name = ? AND tb.name = ?",
+            schema,
+            table,
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+    def add_column(
+        self,
+        schema: str,
+        table: str,
+        name: str,
+        sql_type: str,
+        *,
+        nullable: bool = True,
+    ) -> None:
+        null = "NULL" if nullable else "NOT NULL"
+        self.execute(
+            f"ALTER TABLE [{schema}].[{table}] ADD [{name}] {sql_type} {null}"
+        )
+
     def column_char_widths(self, schema: str, table: str) -> dict[str, int | None]:
         """NVARCHAR/CHAR declared length. None means MAX (no clip). Missing tables: {}."""
         cur = self.conn.cursor()
