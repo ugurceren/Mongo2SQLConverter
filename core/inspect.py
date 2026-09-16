@@ -484,8 +484,9 @@ def nesting_keys_for(shape: dict[str, Any] | None) -> tuple[list[str], str]:
     """
     Which strategies are meaningful for this shape, plus a default.
 
-    Flat collections do not need child-table modes. Hybrid only differs from
-    deep when there are both top-level arrays and deeper nesting.
+    Flat collections do not need child-table modes. Hybrid is omitted when it
+    would create the same tables as deep (no nested arrays — only objects
+    would differ, as columns vs JSON).
     """
     if not shape:
         keys = [item[0] for item in NESTING_OPTIONS]
@@ -494,7 +495,12 @@ def nesting_keys_for(shape: dict[str, Any] | None) -> tuple[list[str], str]:
     has_deep = bool(shape.get("nested_arrays") or shape.get("nested_objects"))
     has_object = bool(shape.get("top_objects") or shape.get("nested_objects"))
     if has_top_array and has_deep:
-        return [NESTING_DEEP, NESTING_HYBRID, NESTING_COLUMNS], NESTING_HYBRID
+        keys = [NESTING_DEEP, NESTING_HYBRID, NESTING_COLUMNS]
+        if preview_table_count(NESTING_DEEP, shape) == preview_table_count(
+            NESTING_HYBRID, shape
+        ):
+            return [NESTING_DEEP, NESTING_COLUMNS], NESTING_DEEP
+        return keys, NESTING_HYBRID
     if has_top_array:
         return [NESTING_DEEP, NESTING_COLUMNS], NESTING_DEEP
     if has_object:

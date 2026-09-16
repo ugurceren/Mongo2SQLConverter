@@ -182,8 +182,8 @@ def render(settings: Settings) -> None:
             f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
         )
         if scope == "collection" and "ddl" in st.session_state and "plan" in st.session_state:
-            with st.expander("MSSQL Plan", expanded=False):
-                st.caption("Başlığı tıklayınca SQL açılır; tekrar tıklayınca kapanır.")
+            ddl_tab, drdl_tab, plan_tab = st.tabs(["MSSQL Plan", "DRDL", "Plan"])
+            with ddl_tab:
                 st.download_button(
                     "DDL indir",
                     st.session_state["ddl"],
@@ -191,7 +191,7 @@ def render(settings: Settings) -> None:
                     key="disc_ddl_download",
                 )
                 st.code(st.session_state["ddl"], language="sql")
-            with st.expander("DRDL", expanded=True):
+            with drdl_tab:
                 st.download_button(
                     "DRDL indir",
                     st.session_state["drdl"],
@@ -199,7 +199,7 @@ def render(settings: Settings) -> None:
                     key="disc_drdl_download",
                 )
                 st.code(st.session_state["drdl"], language="yaml")
-            with st.expander("Plan", expanded=False):
+            with plan_tab:
                 st.json(st.session_state["plan"], expanded=False)
         else:
             st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")

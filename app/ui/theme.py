@@ -7,7 +7,6 @@ from typing import Iterable, Literal, Sequence
 
 import re
 import streamlit as st
-import streamlit.components.v1 as components
 
 State = Literal["ok", "warn", "off"]
 
@@ -707,6 +706,14 @@ section[data-testid="stSidebar"] > div,
     border-top: 1px solid var(--m2s-border);
     color: var(--m2s-muted); font-size: 0.76rem;
 }
+.st-key-m2s_job {
+    margin-top: 0.85rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid var(--m2s-border);
+}
+[data-testid="stSidebar"][aria-expanded="false"] .st-key-m2s_job {
+    display: none !important;
+}
 
 /* ---------- collapsed sidebar keeps a narrow icon rail ---------- */
 [data-testid="stSidebar"][aria-expanded="false"] {
@@ -950,7 +957,47 @@ code, pre, .stCode { font-size: 0.82rem; }
     max-height: none !important;
     overflow: visible !important;
 }
+/* Column picker: search + fullscreen sit on the grid's top-right. */
+.st-key-tr_cols_grid [data-testid="stElementToolbar"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    gap: 0.2rem !important;
+    padding: 0.18rem !important;
+}
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"] {
+    width: 2.15rem !important;
+    height: 2.15rem !important;
+    min-width: 2.15rem !important;
+    min-height: 2.15rem !important;
+    padding: 0 !important;
+    border-radius: 8px !important;
+    background: rgba(240, 246, 252, 0.14) !important;
+    border: 1px solid rgba(240, 246, 252, 0.22) !important;
+    color: #e6edf3 !important;
+    opacity: 1 !important;
+}
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"]:hover {
+    background: rgba(76, 141, 255, 0.30) !important;
+    border-color: rgba(76, 141, 255, 0.55) !important;
+}
+.st-key-tr_cols_grid [data-testid="stElementToolbarButtonIcon"],
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"] svg,
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"] span {
+    font-size: 1.28rem !important;
+    width: 1.28rem !important;
+    height: 1.28rem !important;
+    line-height: 1 !important;
+    color: inherit !important;
+    fill: currentColor !important;
+}
 iframe[height="0"], iframe[height="1"] { display: none !important; }
+.st-key-m2s_shell {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    position: absolute !important;
+}
 </style>
 """
 
@@ -1334,6 +1381,16 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     color: #1f2328 !important;
     -webkit-text-fill-color: #1f2328 !important;
 }
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"] {
+    background: #ffffff !important;
+    border: 1px solid rgba(31, 35, 40, 0.20) !important;
+    color: #1f2328 !important;
+}
+.st-key-tr_cols_grid [data-testid="stElementToolbarButton"]:hover {
+    background: #dbeafe !important;
+    border-color: #2563eb !important;
+    color: #0a3069 !important;
+}
 </style>
 """
 
@@ -1366,9 +1423,29 @@ def inject_css() -> None:
     st.markdown(CSS + extra, unsafe_allow_html=True)
 
 
+def _embed_shell_script(html: str) -> None:
+    """Run top-bar JS in a hidden same-origin iframe (reaches window.parent)."""
+    try:
+        ctx = st.container(key="m2s_shell")
+    except TypeError:
+        ctx = st.container()
+    with ctx:
+        embed = getattr(st, "iframe", None)
+        if callable(embed):
+            try:
+                embed(html, width=1, height=1)
+                return
+            except TypeError:
+                embed(html)
+                return
+        import streamlit.components.v1 as components
+
+        components.html(html, height=1, scrolling=False)
+
+
 def theme_toggle() -> None:
     """Sabit üst şerit: logo, breadcrumb ve ay/güneş. Tıklama Streamlit rerun yapmaz."""
-    components.html(
+    _embed_shell_script(
         """
 <!-- m2s-shell v3: toggle beside name, compact nav -->
 <script>
@@ -1573,9 +1650,7 @@ def theme_toggle() -> None:
   }
 })();
 </script>
-        """,
-        height=1,
-        scrolling=False,
+        """
     )
 
 

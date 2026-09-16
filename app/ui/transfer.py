@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+import sys
 import streamlit as st
 
 from app.ui import theme
+from app.ui import transfer_job
 from app.ui.services import (
     Settings,
     apply_remembered_collection,
@@ -19,35 +21,32 @@ from app.ui.services import (
     date_field_options,
     format_int,
     invalidate_sql_watermarks,
-    mongo_client,
     nesting_card,
     remember_collection,
     sql_table_watermark,
-    sql_target,
     stored_plan,
+    NESTING_KEY,
 )
 from core.inspect import nesting_labels, render_database_ddl, sql_table_ident
-from core.logutil import get_logger, log_path_display
-from core.mongo import combine_filters, date_range_filter, decode_mongo_id, id_after_filter
+from core.logutil import log_path_display
+from core.mongo import date_range_filter
 from core.settings import (
+    ROOT,
     default_transfer_prefs,
     load_sync_watermark,
     load_transfer_prefs,
-    save_sync_watermark,
     save_transfer_prefs,
 )
 from core.transfer import (
     apply_column_selection,
-    ensure_tables,
     plan_column_rows,
     plan_tables,
-    read_root_watermark,
-    transfer_collection,
 )
 
 PLAN_KEY = "transfer_plan"
 RUN_REQUEST_KEY = "tr_run_request"
 RUN_DONE_KEY = "tr_run_done"
+JOB_SEQ_KEY = "tr_job_seq"
 PREFS_KEY = "tr_prefs"
 PREFS_STAMP = "tr_prefs_collection"
 SAVED_PREFS_KEY = "tr_prefs_saved"
@@ -66,6 +65,7 @@ def _defaults(settings: Settings) -> dict:
         "clear_first": False,
         "allow_null": True,
         "mode": "full",
+        "schedule_mode": "auto",
         "watermark": None,
         "nesting": "hybrid",
         "date_filter": default_transfer_prefs()["date_filter"],
@@ -79,7 +79,7 @@ def _defaults(settings: Settings) -> dict:
 
 
 def _prefs(collection: str | None) -> dict:
-    """Saved date range and column exclusions, read once per collection."""
+    """Saved job settings, read once per collection."""
     if not collection:
         return default_transfer_prefs()
     if st.session_state.get(PREFS_STAMP) != collection:
@@ -90,14 +90,42 @@ def _prefs(collection: str | None) -> dict:
         # not rewrite the file.
         st.session_state[SAVED_PREFS_KEY] = repr(prefs)
         st.session_state.pop(EXCLUDE_KEY, None)
+        _apply_prefs_widgets(prefs, collection)
     return st.session_state[PREFS_KEY]
+
+
+def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
+    """Seed widgets when the selected collection changes."""
+    if prefs.get("schema"):
+        st.session_state["tr_schema"] = prefs["schema"]
+    table_key = f"tr_table_{collection}"
+    st.session_state[table_key] = prefs.get("table") or sql_table_ident(collection)
+    st.session_state["tr_sample"] = int(prefs.get("sample") or 5000)
+    st.session_state["tr_batch"] = int(prefs.get("batch") or 500)
+    st.session_state["tr_null"] = bool(prefs.get("allow_null", True))
+    if prefs.get("nesting"):
+        st.session_state[NESTING_KEY] = prefs["nesting"]
+
+
+def _job_prefs(options: dict) -> dict:
+    return {
+        "date_filter": options["date_filter"],
+        "columns": options["columns"],
+        "nesting": options.get("nesting") or "hybrid",
+        "table": options.get("table") or "",
+        "schema": options.get("schema") or "",
+        "schedule_mode": options.get("schedule_mode") or "auto",
+        "batch": int(options.get("batch") or 500),
+        "sample": int(options["sample"]) if options.get("sample") is not None else 5000,
+        "allow_null": bool(options.get("allow_null", True)),
+    }
 
 
 def _remember_prefs(collection: str | None, options: dict) -> None:
     """Write the current choices to config.local.yaml, but only when they change."""
     if not collection:
         return
-    prefs = {"date_filter": options["date_filter"], "columns": options["columns"]}
+    prefs = _job_prefs(options)
     snapshot = repr(prefs)
     if st.session_state.get(SAVED_PREFS_KEY) == snapshot:
         return
@@ -501,21 +529,22 @@ def _columns_card(
         # a different set of columns.
         shape_id = abs(hash(tuple(row["path"] for row in rows))) % 10**8
         nonce = st.session_state.get(EDITOR_NONCE, 0)
-        edited = st.data_editor(
-            data,
-            key=f"tr_cols_{collection}_{shape_id}_{nonce}",
-            hide_index=True,
-            width="stretch",
-            column_config={
-                "aktar": st.column_config.CheckboxColumn("aktar", width="small"),
-                "tablo": st.column_config.TextColumn("tablo", width="medium"),
-                "kolon": st.column_config.TextColumn("kolon", width="medium"),
-                "path": st.column_config.TextColumn("Mongo path", width="large"),
-                "tip": st.column_config.TextColumn("SQL tipi", width="small"),
-                "doluluk": st.column_config.TextColumn("doluluk", width="small"),
-            },
-            disabled=("tablo", "kolon", "path", "tip", "doluluk"),
-        )
+        with st.container(key="tr_cols_grid"):
+            edited = st.data_editor(
+                data,
+                key=f"tr_cols_{collection}_{shape_id}_{nonce}",
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "aktar": st.column_config.CheckboxColumn("aktar", width="small"),
+                    "tablo": st.column_config.TextColumn("tablo", width="medium"),
+                    "kolon": st.column_config.TextColumn("kolon", width="medium"),
+                    "path": st.column_config.TextColumn("Mongo path", width="large"),
+                    "tip": st.column_config.TextColumn("SQL tipi", width="small"),
+                    "doluluk": st.column_config.TextColumn("doluluk", width="small"),
+                },
+                disabled=("tablo", "kolon", "path", "tip", "doluluk"),
+            )
 
         # Only the visible rows are touched, so a search does not clear the
         # choices made for rows that are currently filtered out.
@@ -583,12 +612,12 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 collection = None
                 st.selectbox("Kaynak koleksiyon", options=["Koleksiyon yok"], disabled=True)
         remember_collection(collection)
+        prefs = _prefs(collection) if collection else default_transfer_prefs()
         with row[1]:
             schema = st.text_input("Hedef şema", value=settings.schema, key="tr_schema")
         with row[2]:
             table = st.text_input(
                 "Kök tablo",
-                value=sql_table_ident(collection) if collection else "",
                 key=f"tr_table_{collection or 'none'}",
                 disabled=not collection,
                 help="PascalCase yazılır. Alt tablolar bu addan türer: <Ad><Alan>.",
@@ -605,8 +634,6 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
     options["table"] = sql_table_ident(table) if (table or "").strip() else ""
     if not collection:
         return options
-
-    prefs = _prefs(collection)
 
     st.write("")
     options["nesting"] = nesting_card(
@@ -723,6 +750,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "clear_first": False if incremental else clear_first,
             "allow_null": allow_null,
             "mode": "incremental" if incremental else "full",
+            "schedule_mode": prefs.get("schedule_mode") or "auto",
             "watermark": watermark,
         }
     )
@@ -732,14 +760,6 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
 # --------------------------------------------------------------------------
 # run
 # --------------------------------------------------------------------------
-
-
-def _build_plan(settings: Settings, options: dict) -> dict:
-    plan = cached_plan(settings, options, _date_query(options["date_filter"]))
-    if plan is None:
-        raise RuntimeError("Plan için koleksiyon ve kök tablo adı gerekir.")
-    columns = options["columns"]
-    return apply_column_selection(plan, columns["exclude"], columns["exclude_tables"])
 
 
 def _run_signature(options: dict) -> str:
@@ -776,19 +796,8 @@ def _request_run() -> None:
     st.session_state.pop(RUN_DONE_KEY, None)
 
 
-def _write_query(options: dict) -> dict | None:
-    """Mongo filter for the write pass: date range, `_id` watermark, or both."""
-    dates = _date_query(options["date_filter"])
-    if options["mode"] != "incremental":
-        return dates
-    mark = options.get("watermark")
-    if not mark:
-        return dates
-    try:
-        last_id = decode_mongo_id(mark["last_id"], mark["last_id_type"])
-    except Exception:
-        return dates
-    return combine_filters(dates, id_after_filter(last_id))
+def _request_stop() -> None:
+    transfer_job.request_stop()
 
 
 def _range_note(date_filter: dict[str, Any]) -> str:
@@ -798,6 +807,66 @@ def _range_note(date_filter: dict[str, Any]) -> str:
     if not start or not end:
         return f" · {date_filter['field']}"
     return f" · {date_filter['field']} {start:%d.%m.%Y}–{end:%d.%m.%Y}"
+
+
+def _scheduler_command(collection: str, mode: str) -> tuple[str, str, str]:
+    """Return (one-line command, PowerShell script, batch script)."""
+    python = sys.executable
+    script = ROOT / "tools" / "run_transfer.py"
+    cmdline = f'"{python}" "{script}" --collection {collection} --mode {mode}'
+    if any(ch.isspace() for ch in collection):
+        cmdline = f'"{python}" "{script}" --collection "{collection}" --mode {mode}'
+    ps1 = (
+        "$ErrorActionPreference = 'Stop'\n"
+        f"Set-Location -LiteralPath '{ROOT}'\n"
+        f"& '{python}' '{script}' --collection '{collection}' --mode {mode}\n"
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
+    )
+    bat = (
+        "@echo off\n"
+        f"cd /d \"{ROOT}\"\n"
+        f"\"{python}\" \"{script}\" --collection {collection} --mode {mode}\n"
+        "exit /b %ERRORLEVEL%\n"
+    )
+    return cmdline, ps1, bat
+
+
+def _scheduler_card(options: dict) -> None:
+    collection = options.get("collection")
+    if not collection:
+        return
+    mode = options.get("schedule_mode") or "auto"
+    cmdline, ps1, bat = _scheduler_command(collection, mode)
+    with st.container(border=True):
+        theme.card_title(
+            "Zamanla",
+            "Windows Görev Zamanlayıcı bu komutu çalıştırır. "
+            "İlk koşu boş tabloda tam senkron, sonrakiler artımlı (`auto`).",
+        )
+        st.code(cmdline, language="text")
+        st.caption(
+            f"Başlangıç dizini `{ROOT}`. Windows kimliği için görevi oturum açmış "
+            "kullanıcıyla çalıştırın. SQL şifresi gerekiyorsa `config.local.yaml` içinde olmalı."
+        )
+        row = st.columns(2)
+        with row[0]:
+            st.download_button(
+                ".ps1 indir",
+                ps1,
+                file_name=f"mongo2sql_{collection}.ps1",
+                mime="text/plain",
+                key="tr_sched_ps1",
+                width="stretch",
+            )
+        with row[1]:
+            st.download_button(
+                ".bat indir",
+                bat,
+                file_name=f"mongo2sql_{collection}.bat",
+                mime="text/plain",
+                key="tr_sched_bat",
+                width="stretch",
+            )
 
 
 def _plan_summary(settings: Settings, plan: dict, options: dict) -> None:
@@ -814,103 +883,150 @@ def _plan_summary(settings: Settings, plan: dict, options: dict) -> None:
         st.code("\n".join(tables), language="text")
 
 
-def _run(settings: Settings, options: dict) -> None:
-    plan = _build_plan(settings, options)
-    st.session_state[PLAN_KEY] = plan
-    _plan_summary(settings, plan, options)
-    date_filter = options["date_filter"]
+def _mongo_cfg(settings: Settings) -> dict[str, Any]:
+    cfg = dict(settings.mongo)
+    if settings.mongo_password:
+        cfg["password"] = settings.mongo_password
+    return cfg
+
+
+def _consume_finished_job(job: transfer_job.JobView) -> bool:
+    """Record a finished background job once, then trigger a full rerun."""
+    if job.status not in {"done", "error", "cancelled"}:
+        return False
+    if not job.seq or st.session_state.get(JOB_SEQ_KEY) == job.seq:
+        return False
+    st.session_state[JOB_SEQ_KEY] = job.seq
+    if job.status == "done":
+        st.session_state[RUN_DONE_KEY] = job.signature
+    invalidate_sql_watermarks()
+    return True
+
+
+def _launch_if_requested(settings: Settings, options: dict, selected: dict | None) -> None:
+    if not st.session_state.get(RUN_REQUEST_KEY):
+        return
+    st.session_state.pop(RUN_REQUEST_KEY, None)
+    if selected is None:
+        st.warning("Aktarım başlatılamadı: plan hazır değil.")
+        return
+    if transfer_job.is_busy():
+        st.warning("Bir aktarım zaten sürüyor.")
+        return
+    date_note = _range_note(options["date_filter"]).lstrip(" ·")
+    transfer_job.start(
+        plan=selected,
+        options=options,
+        mongo_cfg=_mongo_cfg(settings),
+        mssql_cfg=dict(settings.mssql),
+        mssql_password=settings.mssql_password,
+        date_query=_date_query(options["date_filter"]),
+        signature=_run_signature(options),
+        log_extra={"aralık": date_note} if date_note else None,
+    )
+    st.rerun()
+
+
+def _progress_fraction(job: transfer_job.JobView) -> float:
+    if job.total:
+        return min(max(job.done / job.total, 0.0), 1.0)
+    return 0.0
+
+
+def _progress_caption(job: transfer_job.JobView) -> str:
+    mode = "Artımlı" if job.mode == "incremental" else "Tam senkron"
+    if job.total:
+        return (
+            f"{mode} · `{job.collection}` · "
+            f"{format_int(job.done)} / {format_int(job.total)} belge"
+        )
+    if job.done:
+        return f"{mode} · `{job.collection}` · {format_int(job.done)} belge"
+    return f"{mode} · `{job.collection}` · {job.message}"
+
+
+def _draw_running(job: transfer_job.JobView, *, stop_key: str, show_bar: bool) -> None:
+    if show_bar:
+        st.progress(_progress_fraction(job))
+    st.caption(_progress_caption(job))
+    if job.message:
+        st.caption(job.message)
+    st.button(
+        "Aktarımı durdur",
+        key=stop_key,
+        on_click=_request_stop,
+        disabled=job.status != "running",
+        width="stretch",
+        help="Açık yazma partisi bitince durur. Sayfa değiştirmek aktarımı durdurmaz.",
+    )
+
+
+def render_sidebar_job() -> None:
+    """Live transfer status in the sidebar on every page."""
+    job = transfer_job.snapshot()
+    if job.status not in {"running", "stopping"}:
+        if _consume_finished_job(job):
+            st.rerun()
+        return
+
+    with st.container(key="m2s_job"):
+
+        @st.fragment(run_every=1.5)
+        def _tick() -> None:
+            live = transfer_job.snapshot()
+            if live.status in {"running", "stopping"}:
+                _draw_running(live, stop_key="tr_stop_side", show_bar=True)
+                return
+            if _consume_finished_job(live):
+                st.rerun()
+
+        _tick()
+
+
+def _render_result(options: dict, job: transfer_job.JobView) -> None:
+    stats = job.stats
     mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
-
-    target = sql_target(settings.mssql, settings.mssql_password, options["schema"])
-    try:
-        target.connect()
-        created, existing = ensure_tables(target, plan, recreate=options["recreate"])
-        invalidate_sql_watermarks()
-        if created:
-            st.success("Oluşturulan tablolar: " + ", ".join(created))
-            get_logger().info(
-                "aktarım tablolar oluşturuldu collection=%s tablolar=%s",
-                options["collection"],
-                ", ".join(created),
-            )
-        if existing:
-            st.caption("Zaten mevcut: " + ", ".join(existing))
-
-        if options["mode"] == "incremental":
-            exists, sql_mark = read_root_watermark(
-                target, options["schema"], plan["root"]["table"]
-            )
-            if exists:
-                options["watermark"] = sql_mark
-
-        query = _write_query(options)
-        status = st.empty()
-        bar = st.progress(0)
-
-        def on_progress(done: int, total: int) -> None:
-            status.caption(f"{done} belge işlendi")
-            if total:
-                bar.progress(min(done / total, 1.0))
-
-        source = mongo_client(settings.mongo)
-        try:
-            source.connect()
-            expected = source.estimated_count(options["collection"], query)
-            date_note = _range_note(date_filter).lstrip(" ·")
-            stats = transfer_collection(
-                source,
-                target,
-                plan,
-                options["collection"],
-                sample=0,
-                batch_size=options["batch"],
-                clear_first=options["clear_first"],
-                query=query,
-                mode=options["mode"],
-                progress=lambda done, _: on_progress(done, expected),
-                expected_count=expected,
-                log_extra={"aralık": date_note} if date_note else None,
-            )
-        finally:
-            source.close()
-        status.empty()
-        bar.empty()
-
-        if stats.last_id and stats.last_id_type:
-            save_sync_watermark(options["collection"], stats.last_id, stats.last_id_type)
-            invalidate_sql_watermarks()
-
-        with st.container(border=True):
-            theme.card_title("Sonuç", f"{options['collection']} → {options['schema']}")
-            cols = st.columns(5)
-            cols[0].metric("Mod", mode_label)
-            cols[1].metric("Belge", stats.documents)
-            cols[2].metric("Satır", stats.total_rows)
-            cols[3].metric("Atlanan", stats.skipped_no_id)
-            cols[4].metric("Kırpılan", stats.truncated)
-            if stats.first_load:
-                st.caption("İlk yükleme: hedef tablo boştu, parti silmeleri atlandı.")
-            st.caption(f"Günlük · `{log_path_display()}`")
-            if stats.last_id:
-                st.caption(f"İşaret `_id` = `{stats.last_id}`")
+    if job.created:
+        st.success("Oluşturulan tablolar: " + ", ".join(job.created))
+    if job.existing:
+        st.caption("Zaten mevcut: " + ", ".join(job.existing))
+    if job.status == "cancelled":
+        st.warning("Aktarım durduruldu. Yazılmış partiler SQL'de kaldı.")
+    if job.status == "error":
+        st.error(job.error or job.message)
+        return
+    if stats is None:
+        return
+    with st.container(border=True):
+        theme.card_title("Sonuç", f"{options['collection']} → {options['schema']}")
+        cols = st.columns(5)
+        cols[0].metric("Mod", mode_label)
+        cols[1].metric("Belge", stats.documents)
+        cols[2].metric("Satır", stats.total_rows)
+        cols[3].metric("Atlanan", stats.skipped_no_id)
+        cols[4].metric("Kırpılan", stats.truncated)
+        if stats.first_load:
+            st.caption("İlk yükleme: hedef tablo boştu, parti silmeleri atlandı.")
+        st.caption(f"Günlük · `{log_path_display()}`")
+        if stats.last_id:
+            st.caption(f"İşaret `_id` = `{stats.last_id}`")
+        if stats.rows:
             st.dataframe(
                 [{"tablo": table, "satır": count} for table, count in stats.rows.items()],
                 hide_index=True,
                 width="stretch",
             )
-        if stats.documents == 0 and options["mode"] == "incremental":
-            st.info("Yeni belge yok; işaret zaten güncel.")
-        if stats.documents == 0 and date_filter.get("enabled"):
-            st.info("Seçilen tarih aralığında belge bulunamadı.")
-        if stats.skipped_no_id:
-            st.caption(f"{stats.skipped_no_id} belgede `_id` yok, birincil anahtar üretilemedi.")
-        if stats.truncated:
-            st.warning(
-                f"{stats.truncated} değer kolon genişliğine kırpıldı. Tam senkron ile "
-                "tam tarama yapıp tabloları yeniden oluşturmak bunu giderir."
-            )
-    finally:
-        target.close()
+    if stats.documents == 0 and options["mode"] == "incremental" and job.status == "done":
+        st.info("Yeni belge yok; işaret zaten güncel.")
+    if stats.documents == 0 and options["date_filter"].get("enabled") and job.status == "done":
+        st.info("Seçilen tarih aralığında belge bulunamadı.")
+    if stats.skipped_no_id:
+        st.caption(f"{stats.skipped_no_id} belgede `_id` yok, birincil anahtar üretilemedi.")
+    if stats.truncated:
+        st.warning(
+            f"{stats.truncated} değer kolon genişliğine kırpıldı. Tam senkron ile "
+            "tam tarama yapıp tabloları yeniden oluşturmak bunu giderir."
+        )
 
 
 def render(settings: Settings) -> None:
@@ -922,7 +1038,8 @@ def render(settings: Settings) -> None:
         step="transfer",
     )
     st.caption(
-        f"Aktarım günlüğü `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır."
+        f"Aktarım günlüğü `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır. "
+        "Başladıktan sonra başka sayfaya geçmek aktarımı durdurmaz; durdurmak için **Aktarımı durdur**."
     )
 
     collections, error, warning = collection_list(settings)
@@ -968,9 +1085,11 @@ def render(settings: Settings) -> None:
     else:
         st.session_state.pop(PLAN_KEY, None)
 
+    job = transfer_job.snapshot()
+    _consume_finished_job(job)
     ready = bool(settings.sql_ready and selected is not None)
     signature = _run_signature(options)
-    busy = bool(st.session_state.get(RUN_REQUEST_KEY))
+    busy = transfer_job.is_busy()
     finished = st.session_state.get(RUN_DONE_KEY) == signature
     write_label = "Artımlı senkron" if options["mode"] == "incremental" else "Tam senkron"
 
@@ -985,10 +1104,19 @@ def render(settings: Settings) -> None:
                 disabled=not ready or busy or finished,
                 on_click=_request_run,
                 width="stretch",
-                help="Eksik tabloları oluşturur, sonra belgeleri yazar.",
+                help="Eksik tabloları oluşturur, sonra belgeleri yazar. Sayfa değiştirmek durdurmaz.",
             )
         with actions[1]:
-            if finished:
+            if busy:
+                st.button(
+                    "Aktarımı durdur",
+                    key="tr_do_stop",
+                    on_click=_request_stop,
+                    disabled=job.status != "running",
+                    width="stretch",
+                    help="Açık yazma partisi bitince durur.",
+                )
+            elif finished:
                 st.button(
                     "Yeniden çalıştır",
                     key="tr_do_again",
@@ -997,30 +1125,44 @@ def render(settings: Settings) -> None:
                 )
         with actions[2]:
             if busy:
-                st.caption("Aktarım sürüyor...")
+                st.caption("Aktarım arka planda sürüyor. Sayfa değiştirmek durdurmaz.")
             elif finished:
                 st.caption("Bu ayarlarla aktarım tamamlandı. Bir ayarı değiştirin ya da yeniden çalıştırın.")
             elif not ready:
                 st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
 
-    if busy:
-        st.write("")
-        try:
-            _run(settings, options)
-        except Exception as exc:
-            get_logger().exception(
-                "aktarım başarısız collection=%s error=%s",
-                options.get("collection"),
-                exc,
-            )
-            st.error(str(exc))
-        else:
-            st.session_state[RUN_DONE_KEY] = signature
-        finally:
-            st.session_state.pop(RUN_REQUEST_KEY, None)
-    elif selected is not None:
+    _launch_if_requested(settings, options, selected)
+
+    if selected is not None:
         st.write("")
         _plan_summary(settings, selected, options)
+
+    if options.get("collection"):
+        st.write("")
+        _scheduler_card(options)
+
+    if busy:
+
+        @st.fragment(run_every=1.5)
+        def _live() -> None:
+            live = transfer_job.snapshot()
+            if live.status in {"running", "stopping"}:
+                st.progress(_progress_fraction(live))
+                st.caption(_progress_caption(live))
+                if live.message:
+                    st.caption(live.message)
+                return
+            if _consume_finished_job(live):
+                st.rerun()
+
+        _live()
+    elif job.collection == (options.get("collection") or "") and job.status in {
+        "done",
+        "error",
+        "cancelled",
+    }:
+        st.write("")
+        _render_result(options, job)
 
     if PLAN_KEY in st.session_state:
         with st.expander("Üretilen DDL", expanded=False):

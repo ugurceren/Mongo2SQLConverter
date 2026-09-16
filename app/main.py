@@ -212,6 +212,7 @@ with st.sidebar:
         ],
         current_key=_current_nav_key(navigation),
     )
+    transfer.render_sidebar_job()
     _sidebar_status(SETTINGS)
 
 navigation.run()

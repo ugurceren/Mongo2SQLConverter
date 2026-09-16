@@ -115,6 +115,7 @@ def save_sync_watermark(collection: str, last_id: str, last_id_type: str) -> Pat
 # --------------------------------------------------------------------------
 
 TIMEZONE_MODES = ("local", "utc")
+SCHEDULE_MODES = ("auto", "full", "incremental")
 
 
 def _as_date(value: Any) -> date | None:
@@ -134,6 +135,19 @@ def _as_path_list(value: Any) -> list[str]:
     return sorted({str(item) for item in value if item})
 
 
+def _as_int(value: Any, default: int, minimum: int = 0) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, number)
+
+
+def _as_schedule_mode(value: Any) -> str:
+    text = str(value or "auto").strip().lower()
+    return text if text in SCHEDULE_MODES else "auto"
+
+
 def default_transfer_prefs() -> dict[str, Any]:
     return {
         "date_filter": {
@@ -144,12 +158,19 @@ def default_transfer_prefs() -> dict[str, Any]:
             "timezone": "local",
         },
         "columns": {"exclude": [], "exclude_tables": []},
+        "nesting": "hybrid",
+        "table": "",
+        "schema": "",
+        "schedule_mode": "auto",
+        "batch": 500,
+        "sample": 5000,
+        "allow_null": True,
     }
 
 
 def load_transfer_prefs(collection: str) -> dict[str, Any]:
     """
-    Saved date range and column exclusions for one collection.
+    Saved job settings for one collection (date range, columns, schedule).
 
     Always returns the full shape with defaults, so the UI can read it without
     guarding for missing keys. `exclude` holds Mongo field paths and
@@ -177,12 +198,24 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
             "exclude": _as_path_list(saved_columns.get("exclude")),
             "exclude_tables": _as_path_list(saved_columns.get("exclude_tables")),
         }
+
+    nesting = str(stored.get("nesting") or "").strip()
+    if nesting:
+        prefs["nesting"] = nesting
+    prefs["table"] = str(stored.get("table") or "").strip()
+    prefs["schema"] = str(stored.get("schema") or "").strip()
+    prefs["schedule_mode"] = _as_schedule_mode(stored.get("schedule_mode"))
+    prefs["batch"] = _as_int(stored.get("batch"), 500, 100)
+    prefs["sample"] = _as_int(stored.get("sample"), 5000, 0)
+    if "allow_null" in stored:
+        prefs["allow_null"] = bool(stored.get("allow_null"))
     return prefs
 
 
 def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
     if not collection:
         return LOCAL_CONFIG_PATH
+    defaults = default_transfer_prefs()
     saved_filter = prefs.get("date_filter") or {}
     saved_columns = prefs.get("columns") or {}
     start = _as_date(saved_filter.get("start"))
@@ -203,6 +236,13 @@ def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
             "exclude": _as_path_list(saved_columns.get("exclude")),
             "exclude_tables": _as_path_list(saved_columns.get("exclude_tables")),
         },
+        "nesting": str(prefs.get("nesting") or defaults["nesting"]),
+        "table": str(prefs.get("table") or "").strip(),
+        "schema": str(prefs.get("schema") or "").strip(),
+        "schedule_mode": _as_schedule_mode(prefs.get("schedule_mode")),
+        "batch": _as_int(prefs.get("batch"), defaults["batch"], 100),
+        "sample": _as_int(prefs.get("sample"), defaults["sample"], 0),
+        "allow_null": bool(prefs["allow_null"]) if "allow_null" in prefs else True,
     }
     local["transfer"] = transfer
     return _write_local(local)

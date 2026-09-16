@@ -61,6 +61,27 @@ python run.py
 
 Aktarım ve profil satırları `logs/mongo2sql.log` dosyasına yazılır (başlangıç, ilerleme, bitiş, hata). Dosya 10 MB olunca döner. `logs/` git'e eklenmez.
 
+**CLI (aktarım / Görev Zamanlayıcı):**
+
+```powershell
+python tools/run_transfer.py --collection conversations --mode auto
+```
+
+`--mode auto` (varsayılan kayıtlı tercih): hedef kök tablo yoksa veya boşsa **tam senkron**, tabloda satır varsa **artımlı** (`mongo_id` son `_id`'den büyük). Tek Windows görevi yeter; iki ayrı görev gerekmez.
+
+`--mode full` tabloyu yeniden doldurur. `--mode incremental` her zaman artımlıdır (işaret yoksa yine tüm belgeleri okur).
+
+Bağlantı ve job ayarları `config.local.yaml` içindedir (koleksiyon başına `nesting`, `table`, `schema`, `schedule_mode`, `batch`, `sample`, kolon ve tarih tercihleri). SQL şifresi gerekiyorsa dosyada olmalı; Streamlit oturum şifresi CLI'da yoktur.
+
+**Windows Görev Zamanlayıcı:**
+
+1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin.
+2. Görev Zamanlayıcı → Görev Oluştur. Eylem: Program `python.exe` (venv), argümanlar `tools\run_transfer.py --collection <ad> --mode auto`, başlangıç dizini proje klasörü.
+3. **Windows — bu oturum** kimliği için görevi o Windows kullanıcısıyla ve "kullanıcı oturum açmış olsun" ile çalıştırın (Trusted Connection oturuma bağlıdır).
+4. Çıkış kodu 0 başarı, 1 hata. Ayrıntı `logs/mongo2sql.log`.
+
+Periyodik görevde tarih aralığını kapatın. Artımlı + sabit tarih birlikte kullanıldığında aralık dışı `_id`'ler sonraki koşularda kaçabilir; dönem yüklemesi için tam senkron daha güvenlidir. `auto` artımlı aşamada kayıtlı tarih filtresini uygulamaz.
+
 **CLI (DRDL):**
 
 ```powershell
@@ -93,7 +114,7 @@ Aralik yalnizca yazmayi degil profillemeyi de daraltir, boylece kolon genislikle
 
 **Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden gelir; koleksiyon ve kok tablo secildigi anda profil otomatik cikarilir.
 
-Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir.
+Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir. Ayni kayda kirilim, kok tablo, sema, yazma partisi ve `schedule_mode` da eklenir; CLI / Gorev Zamanlayici bunlari okur.
 
 **Dikkat:** Artimli senkron ile tarih araligini birlikte kullanirken belgeler `_id` sirasiyla okunur ve isaret yalnizca filtreden gecen son belgeye ilerler; aralik disinda kalan daha buyuk `_id`'ler sonraki kosularda bir daha okunmaz. Donem bazli yukleme icin tam senkron daha guvenlidir.
 
@@ -104,6 +125,7 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 - `core/transfer.py` — plana gore flatten + MSSQL'e yazma
 - `core/mongo.py` — Mongo baglantisi
 - `core/mssql.py` — MSSQL baglantisi
+- `core/run_job.py` — Streamlit'siz profil + aktarım (CLI)
 - `core/settings.py` — config.yaml + config.local.yaml
 - `app/main.py` — Streamlit kabugu (gezinme, durum)
 - `app/ui/theme.py` — stil ve ortak arayuz parcalari
@@ -111,7 +133,8 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 - `app/ui/discovery.py` — Sema kesfi sayfasi (SQL gerekmez)
 - `app/ui/transfer.py` — SQL aktarimi sayfasi
 - `app/ui/connections.py` — Baglantilar sayfasi
-- `tools/infer_schema.py` — CLI
+- `tools/infer_schema.py` — sema CLI
+- `tools/run_transfer.py` — aktarım CLI (Görev Zamanlayıcı)
 
 ## Ayirma
 

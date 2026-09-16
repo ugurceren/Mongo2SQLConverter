@@ -126,3 +126,12 @@ class JobLog:
         if isinstance(documents, int) and documents > 0:
             extra["hız"] = f"{documents / elapsed:.0f}/sn"
         self.log.info("%s bitti %s", self.kind, self._kv(extra))
+
+    def stopped(self, **extra: Any) -> None:
+        elapsed = max(self.elapsed(), 0.001)
+        extra = dict(extra)
+        extra["süre_sn"] = f"{elapsed:.1f}"
+        documents = extra.get("belgeler")
+        if isinstance(documents, int) and documents > 0:
+            extra["hız"] = f"{documents / elapsed:.0f}/sn"
+        self.log.info("%s durduruldu %s", self.kind, self._kv(extra))

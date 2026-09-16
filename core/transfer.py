@@ -27,6 +27,7 @@ from core.mssql import MssqlConnection
 from core.textutil import clip_utf16, json_text, utf16_len
 
 ProgressCallback = Callable[[int, int], None]
+StopCallback = Callable[[], bool]
 
 
 # --------------------------------------------------------------------------
@@ -452,6 +453,7 @@ class TransferStats:
     last_id_type: str | None = None
     mode: str = "full"
     first_load: bool = False
+    stopped: bool = False
 
     def add_rows(self, table: str, count: int) -> None:
         if count:
@@ -584,6 +586,7 @@ def transfer_collection(
     progress: ProgressCallback | None = None,
     expected_count: int | None = None,
     log_extra: dict[str, Any] | None = None,
+    should_stop: StopCallback | None = None,
 ) -> TransferStats:
     """Stream a collection into the plan's tables, batch by batch.
 
@@ -658,6 +661,20 @@ def transfer_collection(
         for rows in child_rows.values():
             rows.clear()
 
+    def stop_now() -> bool:
+        return bool(should_stop and should_stop())
+
+    def halt() -> TransferStats:
+        stats.stopped = True
+        job.stopped(
+            belgeler=stats.documents,
+            satır=stats.total_rows,
+            atlanan=stats.skipped_no_id,
+            kırpılan=stats.truncated,
+            last_id=stats.last_id,
+        )
+        return stats
+
     for doc in mongo.iter_documents(
         collection,
         sample=sample,
@@ -665,6 +682,9 @@ def transfer_collection(
         query=query,
         sort_by_id=not sample,
     ):
+        if stop_now():
+            flush()
+            return halt()
         stats.documents += 1
         encoded = encode_mongo_id(doc.get("_id"))
         if encoded:
@@ -689,6 +709,8 @@ def transfer_collection(
                 satır=stats.total_rows,
                 last_id=stats.last_id,
             )
+            if stop_now():
+                return halt()
 
     flush()
     if progress:
