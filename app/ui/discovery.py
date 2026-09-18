@@ -41,19 +41,27 @@ def _clear_results() -> None:
         st.session_state.pop(key, None)
     for key in [item for item in st.session_state if str(item).startswith("disc_table_names_")]:
         st.session_state.pop(key, None)
+    for key in [item for item in st.session_state if str(item).startswith("disc_tables_nonce_")]:
+        st.session_state.pop(key, None)
 
 
 def _rename_collection_tables(settings: Settings, collection: str) -> None:
     plan = st.session_state.get("plan")
     if not isinstance(plan, dict):
         return
-    overrides = dict(st.session_state.get(f"disc_table_names_{collection}") or {})
-    shape = (plan["root"]["table"], tuple(child["source"] for child in plan["children"]))
+    overrides = {
+        source: name
+        for source, name in dict(st.session_state.get(f"disc_table_names_{collection}") or {}).items()
+        if source
+    }
+    nonce_key = f"disc_tables_nonce_{collection}"
+    nonce = int(st.session_state.get(nonce_key) or 0)
+    sources = ",".join(child["source"] for child in plan["children"])
     st.caption("Tablo adları — SQL adı kolonunu düzenleyin. Boş bırakılan alt tablolar kök addan türemeye devam eder.")
-    new_root, new_overrides, duplicates = table_names_editor(
+    new_root, new_overrides, duplicates, needs_reset = table_names_editor(
         plan,
         overrides,
-        editor_key=f"disc_tables_{collection}_{abs(hash(shape)) % 10**8}",
+        editor_key=f"disc_tables_{collection}_{plan['root']['table']}_{sources}_{nonce}",
     )
     st.caption("Adlar PascalCase'e çevrilir. Aynı isim iki tabloda kullanılamaz.")
     if duplicates:
@@ -61,14 +69,12 @@ def _rename_collection_tables(settings: Settings, collection: str) -> None:
             "Bu adlar birden fazla tabloda yazıldı, ikincisi yok sayıldı: "
             + ", ".join(duplicates)
         )
-    if new_root != plan["root"]["table"]:
+    root_changed = new_root != plan["root"]["table"]
+    if root_changed:
         plan = retarget_plan(
-            plan, schema=plan.get("schema") or settings.schema, root_table=new_root
+            plan, schema=settings.schema, root_table=new_root
         )
         st.session_state["plan"] = plan
-        root_changed = True
-    else:
-        root_changed = False
     st.session_state[f"disc_table_names_{collection}"] = new_overrides
     database = settings.mongo.get("database") or "database"
     named = apply_table_names(plan, new_overrides)
@@ -82,7 +88,8 @@ def _rename_collection_tables(settings: Settings, collection: str) -> None:
             save_transfer_prefs(collection, prefs)
         except OSError as exc:
             st.caption(f"Tablo adları kaydedilemedi: {exc}")
-    if root_changed:
+    if root_changed or needs_reset:
+        st.session_state[nonce_key] = nonce + 1
         st.rerun()
 
 
@@ -117,6 +124,7 @@ def _overview(settings: Settings, collections: list[str]) -> bool:
                 on_click=invalidate_collections,
                 width="stretch",
             )
+        st.caption("Şema yalnız **Bağlantılar** sayfasında değişir.")
     return run_database
 
 

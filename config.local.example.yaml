@@ -35,7 +35,6 @@ transfer:
         - "tracker.slots"
     nesting: hybrid          # deep | hybrid | columns
     table: Conversations     # kok tablo; bos ise koleksiyon adindan uretilir
-    schema: dbo
     schedule_mode: auto      # auto | full | incremental
     batch: 500
     sample: 5000             # profil ornegi; 0 = tam tarama

@@ -143,7 +143,8 @@ def run_transfer_job(
     """Profile and write one collection using `config.local.yaml` prefs.
 
     `--table` / `--rename` from a downloaded bat pin the SQL tables for that
-    job so another collection's UI edits cannot redirect it.
+    job so another collection's UI edits cannot redirect it. Schema comes from
+    `mssql.schema` unless `--schema` is passed.
     """
     name = (collection or "").strip()
     if not name:
@@ -160,8 +161,6 @@ def run_transfer_job(
         prefs["table_names"] = dict(table_names or {})
     elif table_names is not None:
         prefs["table_names"] = dict(table_names)
-    if (schema or "").strip():
-        prefs["schema"] = str(schema).strip()
 
     if not (mongo_cfg.get("uri") and mongo_cfg.get("database")):
         raise RuntimeError("Mongo bağlantısı config.local.yaml içinde yok.")
@@ -175,7 +174,7 @@ def run_transfer_job(
 
     allowed_nesting = {item[0] for item in NESTING_OPTIONS}
     nesting = prefs["nesting"] if prefs["nesting"] in allowed_nesting else "hybrid"
-    schema = prefs["schema"] or mssql_cfg.get("schema") or "dbo"
+    schema = str(schema or "").strip() or mssql_cfg.get("schema") or "dbo"
     table = sql_table_ident(prefs["table"] or name)
     requested = _as_schedule_mode(mode if mode is not None else prefs["schedule_mode"])
     write_batch = int(batch) if batch is not None else int(prefs["batch"])

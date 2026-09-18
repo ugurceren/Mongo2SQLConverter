@@ -269,7 +269,6 @@ def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
         },
         "nesting": str(prefs.get("nesting") or defaults["nesting"]),
         "table": str(prefs.get("table") or "").strip(),
-        "schema": str(prefs.get("schema") or "").strip(),
         "schedule_mode": _as_schedule_mode(prefs.get("schedule_mode")),
         "batch": _as_int(prefs.get("batch"), defaults["batch"], 100),
         "sample": _as_int(prefs.get("sample"), defaults["sample"], 0),

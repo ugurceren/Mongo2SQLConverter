@@ -97,13 +97,34 @@ def _prefs(collection: str | None) -> dict:
     return st.session_state[PREFS_KEY]
 
 
+def _pending_table_key(collection: str) -> str:
+    return f"tr_pending_table_{collection}"
+
+
+def _table_widget_key(collection: str) -> str:
+    return f"tr_table_{collection}"
+
+
+def _sync_table_widget(collection: str, prefs: dict) -> None:
+    """Apply pending / PascalCase names before the Kök tablo input is created."""
+    table_key = _table_widget_key(collection)
+    pending_key = _pending_table_key(collection)
+    if pending_key in st.session_state:
+        st.session_state[table_key] = st.session_state.pop(pending_key)
+    elif table_key not in st.session_state:
+        st.session_state[table_key] = prefs.get("table") or sql_table_ident(collection)
+    current = st.session_state.get(table_key)
+    if isinstance(current, str) and current.strip():
+        normalized = sql_table_ident(current)
+        if current != normalized:
+            st.session_state[table_key] = normalized
+
+
 def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
     """Seed widgets when the selected collection changes."""
-    st.session_state[f"tr_schema_{collection}"] = prefs.get("schema") or st.session_state.get(
-        f"tr_schema_{collection}", ""
+    st.session_state[_table_widget_key(collection)] = prefs.get("table") or sql_table_ident(
+        collection
     )
-    table_key = f"tr_table_{collection}"
-    st.session_state[table_key] = prefs.get("table") or sql_table_ident(collection)
     st.session_state[f"tr_sample_{collection}"] = int(prefs.get("sample") or 5000)
     st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 500)
     st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
@@ -117,7 +138,6 @@ def _job_prefs(options: dict) -> dict:
         "columns": options["columns"],
         "nesting": options.get("nesting") or "hybrid",
         "table": options.get("table") or "",
-        "schema": options.get("schema") or "",
         "schedule_mode": options.get("schedule_mode") or "auto",
         "batch": int(options.get("batch") or 500),
         "sample": int(options["sample"]) if options.get("sample") is not None else 5000,
@@ -604,7 +624,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "Hedef",
             "Önce koleksiyon ve kök tabloyu seçin. Kırılım sonra sorulur.",
         )
-        row = st.columns([2.2, 1.6, 1.6], vertical_alignment="bottom")
+        row = st.columns([2.6, 1.8], vertical_alignment="bottom")
         with row[0]:
             if collections:
                 apply_remembered_collection("tr_collection", collections)
@@ -621,29 +641,25 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 st.selectbox("Kaynak koleksiyon", options=["Koleksiyon yok"], disabled=True)
         remember_collection(collection)
         prefs = _prefs(collection) if collection else default_transfer_prefs()
+        if collection:
+            _sync_table_widget(collection, prefs)
         with row[1]:
-            schema_key = f"tr_schema_{collection or 'none'}"
-            if collection and schema_key not in st.session_state:
-                st.session_state[schema_key] = prefs.get("schema") or settings.schema
-            schema = st.text_input(
-                "Hedef şema",
-                key=schema_key,
-                disabled=not collection,
-            )
-        with row[2]:
             table = st.text_input(
                 "Kök tablo",
-                key=f"tr_table_{collection or 'none'}",
+                key=_table_widget_key(collection) if collection else "tr_table_none",
                 disabled=not collection,
                 help="PascalCase yazılır. Alt tablolar bu addan türer; her tabloyu Plan kartından ayrıca adlandırabilirsiniz.",
             )
+        st.caption(
+            f"Hedef şema `{settings.schema}` — yalnız **Bağlantılar** sayfasında değişir."
+        )
         if not collection:
             st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
         else:
             collection_count_caption(settings, collection)
 
     options["collection"] = collection
-    options["schema"] = (schema or "").strip() or settings.schema
+    options["schema"] = settings.schema
     # Normalised here as well as in the plan, so the watermark and table-exists
     # lookups ask about the name the transfer will actually create.
     options["table"] = sql_table_ident(table) if (table or "").strip() else ""
@@ -836,11 +852,9 @@ def _quote_ps(arg: str) -> str:
 
 
 def _scheduler_args(
-    collection: str, mode: str, schema: str, table: str, table_names: dict[str, str]
+    collection: str, mode: str, table: str, table_names: dict[str, str]
 ) -> list[str]:
     args = ["--collection", collection, "--mode", mode]
-    if schema:
-        args += ["--schema", schema]
     if table:
         args += ["--table", table]
     for source, name in sorted((table_names or {}).items()):
@@ -851,14 +865,13 @@ def _scheduler_args(
 def _scheduler_command(
     collection: str,
     mode: str,
-    schema: str,
     table: str,
     table_names: dict[str, str],
 ) -> tuple[str, str, str]:
     """Return (one-line command, PowerShell script, batch script)."""
     python = sys.executable
     script = ROOT / "tools" / "run_transfer.py"
-    extra = _scheduler_args(collection, mode, schema, table, table_names)
+    extra = _scheduler_args(collection, mode, table, table_names)
     cmd_args = " ".join(_quote_cmd(part) for part in extra)
     ps_args = " ".join(_quote_ps(part) for part in extra)
     cmdline = f'"{python}" "{script}" {cmd_args}'
@@ -885,7 +898,7 @@ def _scheduler_card(options: dict) -> None:
     schema = options.get("schema") or ""
     table = options.get("table") or ""
     table_names = dict(options.get("table_names") or {})
-    cmdline, ps1, bat = _scheduler_command(collection, mode, schema, table, table_names)
+    cmdline, ps1, bat = _scheduler_command(collection, mode, table, table_names)
     with st.container(border=True):
         theme.card_title(
             "Zamanla",
@@ -898,7 +911,8 @@ def _scheduler_card(options: dict) -> None:
         st.caption(
             f"Hedef `{schema}.{targets}`"
             + (f" · {extra}" if extra else "")
-            + f". Başlangıç dizini `{ROOT}`. Windows kimliği için görevi oturum açmış "
+            + f". Şema Bağlantılar sayfasındaki `mssql.schema` değeridir. "
+            f"Başlangıç dizini `{ROOT}`. Windows kimliği için görevi oturum açmış "
             "kullanıcıyla çalıştırın. SQL şifresi gerekiyorsa `config.local.yaml` içinde olmalı."
         )
         row = st.columns(2)
@@ -925,9 +939,17 @@ def _scheduler_card(options: dict) -> None:
 def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
     """Rename generated SQL tables. Returns the plan with those names applied."""
     collection = options["collection"]
-    overrides = dict(options.get("table_names") or {})
-    shape = (plan["root"]["table"], tuple(child["source"] for child in plan["children"]))
-    editor_key = f"tr_tables_{collection}_{abs(hash(shape)) % 10**8}"
+    overrides = {
+        source: name
+        for source, name in dict(options.get("table_names") or {}).items()
+        if source
+    }
+    nonce_key = f"tr_tables_nonce_{collection}"
+    nonce = int(st.session_state.get(nonce_key) or 0)
+    # Root + child sources are part of the key so a new name or nesting does not
+    # replay typed cells onto the wrong rows. Streamlit keeps edits per key.
+    sources = ",".join(child["source"] for child in plan["children"])
+    editor_key = f"tr_tables_{collection}_{plan['root']['table']}_{sources}_{nonce}"
     table_count = 1 + len(plan["children"])
     mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
     nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
@@ -938,7 +960,7 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
             f"<code>{plan['schema']}</code> — {table_count} tablo · {mode_label} · "
             f"{nesting_title}{_range_note(options['date_filter'])}",
         )
-        new_root, new_overrides, duplicates = table_names_editor(
+        new_root, new_overrides, duplicates, needs_reset = table_names_editor(
             plan, overrides, editor_key=editor_key
         )
         st.caption(
@@ -951,9 +973,16 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
                 + ", ".join(duplicates)
             )
     options["table_names"] = new_overrides
-    if new_root != options["table"]:
-        st.session_state[f"tr_table_{collection}"] = new_root
-        options["table"] = new_root
+    root_changed = new_root != options["table"]
+    overrides_changed = new_overrides != overrides
+    if root_changed or needs_reset or overrides_changed:
+        if root_changed:
+            # The Kök tablo input already exists this run; Streamlit forbids
+            # writing its widget key now. Apply the name on the next run.
+            st.session_state[_pending_table_key(collection)] = new_root
+            options["table"] = new_root
+        if needs_reset or root_changed:
+            st.session_state[nonce_key] = nonce + 1
         _remember_prefs(collection, options)
         st.rerun()
     return apply_table_names(plan, new_overrides)

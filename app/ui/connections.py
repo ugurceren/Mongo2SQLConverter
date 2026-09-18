@@ -307,6 +307,7 @@ def _sql_card(settings: Settings) -> None:
                 settings.mssql.get("schema"),
                 HINT_SQL_SCHEMA,
                 _EXAMPLE_SQL_SCHEMA,
+                help="Keşif ve aktarım bu şemaya yazar. Diğer sayfalardan değiştirilemez.",
             )
         with right:
             st.markdown("**Kimlik doğrulama**")

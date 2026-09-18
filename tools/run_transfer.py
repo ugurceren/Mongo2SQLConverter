@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--schema",
         default=None,
-        help="SQL schema for this job. Default: saved pref or mssql.schema.",
+        help="SQL schema for this job. Default: mssql.schema from Bağlantılar.",
     )
     parser.add_argument(
         "--rename",

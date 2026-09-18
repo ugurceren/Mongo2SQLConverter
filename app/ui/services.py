@@ -462,25 +462,45 @@ def nesting_choice(
 nesting_card = nesting_choice
 
 
+def _editor_cell_text(entry: dict[str, Any], *keys: str, fallback: str) -> str:
+    """Read a data-editor cell, treating blank / NaN as the generated name."""
+    raw: Any = None
+    for key in keys:
+        if key in entry:
+            raw = entry.get(key)
+            break
+    if raw is None:
+        return fallback
+    if isinstance(raw, float) and raw != raw:
+        return fallback
+    text = str(raw).strip()
+    if not text or text.lower() in {"nan", "none", "<na>"}:
+        return fallback
+    return text
+
+
 def table_names_editor(
     plan: dict[str, Any],
     overrides: dict[str, str],
     *,
     editor_key: str,
-) -> tuple[str, dict[str, str], list[str]]:
+) -> tuple[str, dict[str, str], list[str], bool]:
     """
     Let the user rename generated SQL tables.
 
-    Returns (root_table, child_overrides, duplicate_names). Child overrides are
-    keyed by Mongo source path and only kept when they differ from the generated
-    name, so a later kök-tablo rename still updates untouched children.
+    Returns (root_table, child_overrides, duplicate_names, needs_reset).
+    Child overrides are keyed by Mongo source path and only kept when they
+    differ from the generated name, so a later kök-tablo rename still updates
+    untouched children. `needs_reset` is true when the grid still shows a raw
+    value that was normalised (PascalCase); the caller must change `editor_key`
+    and rerun, because Streamlit otherwise keeps the typed cell.
     """
     generated_root = plan["root"]["table"]
     rows = [
         {
-            "kaynak": "(kök tablo)",
-            "üretilen": generated_root,
-            "sql_adı": generated_root,
+            "source": "(kök tablo)",
+            "generated": generated_root,
+            "sql_name": generated_root,
         }
     ]
     paths = [""]
@@ -489,9 +509,9 @@ def table_names_editor(
         custom = str(overrides.get(child["source"]) or "").strip()
         rows.append(
             {
-                "kaynak": child["source"],
-                "üretilen": generated,
-                "sql_adı": sql_table_ident(custom) if custom else generated,
+                "source": child["source"],
+                "generated": generated,
+                "sql_name": sql_table_ident(custom) if custom else generated,
             }
         )
         paths.append(child["source"])
@@ -503,11 +523,11 @@ def table_names_editor(
         width="stretch",
         num_rows="fixed",
         column_config={
-            "kaynak": st.column_config.TextColumn("kaynak", width="medium"),
-            "üretilen": st.column_config.TextColumn("üretilen", width="medium"),
-            "sql_adı": st.column_config.TextColumn("SQL adı", width="medium"),
+            "source": st.column_config.TextColumn("kaynak", width="medium"),
+            "generated": st.column_config.TextColumn("üretilen", width="medium"),
+            "sql_name": st.column_config.TextColumn("SQL adı", width="medium"),
         },
-        disabled=("kaynak", "üretilen"),
+        disabled=["source", "generated"],
     )
     edited_rows = edited if isinstance(edited, list) else edited.to_dict("records")
 
@@ -515,9 +535,14 @@ def table_names_editor(
     new_overrides: dict[str, str] = {}
     seen: dict[str, str] = {}
     duplicates: list[str] = []
+    needs_reset = False
     for path, original, entry in zip(paths, rows, edited_rows):
-        raw = str(entry.get("sql_adı") or original["üretilen"]).strip()
+        raw = _editor_cell_text(
+            entry, "sql_name", "sql_adı", fallback=original["generated"]
+        )
         name = sql_table_ident(raw)
+        if raw != name:
+            needs_reset = True
         folded = name.lower()
         if folded in seen:
             duplicates.append(name)
@@ -525,9 +550,9 @@ def table_names_editor(
         seen[folded] = path
         if path == "":
             new_root = name
-        elif name != original["üretilen"]:
+        elif name != original["generated"]:
             new_overrides[path] = name
-    return new_root, new_overrides, duplicates
+    return new_root, new_overrides, duplicates, needs_reset
 
 
 # --------------------------------------------------------------------------
