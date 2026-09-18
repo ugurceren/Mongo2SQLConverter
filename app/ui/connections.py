@@ -199,13 +199,13 @@ def _test_sql(target: MssqlConnection) -> None:
 
 
 def _mongo_card(settings: Settings) -> None:
-    with st.container(border=True):
-        theme.section_heading(
-            "Kaynak",
-            "MongoDB",
-            "Şema keşfi ve aktarım için okunan veritabanı. Zorunlu. "
-            "Gri yazı örnektir; Kaydet'e basınca config.local.yaml yazar.",
-        )
+    with theme.collapsible_card(
+        "conn_mongo",
+        "MongoDB",
+        "Şema keşfi ve aktarım için okunan veritabanı. Zorunlu. "
+        "Gri yazı örnektir; Kaydet'e basınca config.local.yaml yazar.",
+        kicker="Kaynak",
+    ):
         with st.form("mongo_conn"):
             left, right = st.columns(2)
             with left:
@@ -274,13 +274,13 @@ def _mongo_card(settings: Settings) -> None:
 
 
 def _sql_card(settings: Settings) -> None:
-    with st.container(border=True):
-        theme.section_heading(
-            "Hedef",
-            "SQL Server",
-            "Yalnızca veri aktarırken gerekir. Şema keşfi bu bağlantıyı kullanmaz. "
-            "Gri yazı örnektir; gerçek değerleri siz yazın.",
-        )
+    with theme.collapsible_card(
+        "conn_sql",
+        "SQL Server",
+        "Yalnızca veri aktarırken gerekir. Şema keşfi bu bağlantıyı kullanmaz. "
+        "Gri yazı örnektir; gerçek değerleri siz yazın.",
+        kicker="Hedef",
+    ):
         if "sql_auth_mode" not in st.session_state:
             st.session_state["sql_auth_mode"] = settings.sql_auth
 

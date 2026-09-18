@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from html import escape
-from typing import Iterable, Literal, Sequence
+from typing import Iterator, Iterable, Literal, Sequence
 
 import re
 import streamlit as st
@@ -15,8 +16,8 @@ CSS = """
 :root {
     --m2s-accent: #4c8dff;
     --m2s-accent-soft: rgba(76, 141, 255, 0.14);
-    --m2s-border: rgba(240, 246, 252, 0.10);
-    --m2s-muted: #8b98a9;
+    --m2s-border: rgba(240, 246, 252, 0.16);
+    --m2s-muted: #9aa6b4;
     --m2s-ok: #3fb950;
     --m2s-warn: #d29922;
     --m2s-off: #6e7681;
@@ -24,6 +25,15 @@ CSS = """
     --m2s-topbar: 56px;
     --m2s-sidebar: 292px;
     --m2s-nav: 220px;
+    --m2s-glass: rgba(22, 27, 34, 0.78);
+    --m2s-glass-strong: rgba(13, 17, 23, 0.86);
+    --m2s-glass-border: rgba(240, 246, 252, 0.16);
+    --m2s-glass-blur: 16px;
+    --m2s-app-bg:
+        radial-gradient(1100px 520px at 8% -8%, rgba(76, 141, 255, 0.22), transparent 58%),
+        radial-gradient(900px 480px at 100% 4%, rgba(34, 211, 238, 0.12), transparent 52%),
+        radial-gradient(740px 420px at 78% 100%, rgba(123, 92, 255, 0.12), transparent 50%),
+        #0d1117;
 }
 
 /* Keep the toolbar mounted: it hosts the button that reopens the sidebar. */
@@ -46,8 +56,38 @@ CSS = """
     max-height: none !important;
     box-sizing: border-box !important;
 }
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+section[data-testid="stMain"] {
+    background: var(--m2s-app-bg) !important;
+    background-attachment: fixed !important;
+}
 [data-testid="stAppViewContainer"] {
     height: 100% !important;
+}
+.block-container,
+[data-testid="stMainBlockContainer"],
+[data-testid="stHeader"] {
+    background: transparent !important;
+}
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+.m2s-topbar,
+.m2s-topbar-brand,
+section[data-testid="stSidebar"],
+[data-testid="stVerticalBlockBorderWrapper"],
+[class*="st-key-m2s_card_"],
+[data-testid="stForm"],
+.react-aria-ComboBox > div,
+[class*="st-key-m2s_next_"] {
+    transition:
+        background-color 0.4s ease,
+        background 0.4s ease,
+        border-color 0.4s ease,
+        box-shadow 0.4s ease,
+        color 0.35s ease;
 }
 
 /* Collapse / expand live in the top bar; keep Streamlit's buttons for JS clicks. */
@@ -89,8 +129,10 @@ section[data-testid="stMain"] .block-container {
     align-items: stretch;
     padding: 0;
     box-sizing: border-box;
-    background: #161b22;
-    border-bottom: 1px solid rgba(240, 246, 252, 0.10);
+    background: var(--m2s-glass-strong);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    border-bottom: 1px solid var(--m2s-glass-border);
     color: #e6edf3;
     pointer-events: auto;
 }
@@ -102,8 +144,10 @@ section[data-testid="stMain"] .block-container {
     width: var(--m2s-sidebar);
     box-sizing: border-box;
     padding: 0 8px 0 12px;
-    background: #0d1117;
-    border-right: 1px solid rgba(240, 246, 252, 0.10);
+    background: rgba(13, 17, 23, 0.72);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    border-right: 1px solid var(--m2s-glass-border);
     min-width: 0;
 }
 .m2s-topbar.is-collapsed .m2s-topbar-brand {
@@ -340,8 +384,10 @@ section[data-testid="stMain"] .block-container {
     border: 1px solid var(--m2s-border);
     border-radius: 14px;
     background:
-        radial-gradient(130% 150% at 0% 0%, rgba(240, 246, 252, 0.055), transparent 62%),
-        rgba(240, 246, 252, 0.018);
+        radial-gradient(130% 150% at 0% 0%, rgba(240, 246, 252, 0.08), transparent 62%),
+        rgba(22, 27, 34, 0.55);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
 }
 [class*="st-key-m2s_next_"]::before {
     content: "";
@@ -496,10 +542,31 @@ section[data-testid="stMain"] .block-container {
 }
 
 /* ---------- cards ---------- */
-[data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stMain"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-    border-radius: 12px;
-    border-color: var(--m2s-border) !important;
+    border-radius: 16px;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"],
+[class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
+[class*="st-key-nest_on_"],
+[class*="st-key-nest_off_"] {
+    border-radius: 16px;
+    background: var(--m2s-glass) !important;
+    border: 1px solid var(--m2s-glass-border) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.07),
+        0 10px 32px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+}
+[data-testid="stForm"] {
+    background: rgba(13, 17, 23, 0.35) !important;
+    border: 1px solid var(--m2s-glass-border) !important;
+    backdrop-filter: blur(12px) saturate(130%);
+    -webkit-backdrop-filter: blur(12px) saturate(130%);
 }
 .m2s-card-title {
     font-size: 0.74rem;
@@ -513,6 +580,20 @@ section[data-testid="stMain"] .block-container {
     color: var(--m2s-muted);
     font-size: 0.85rem;
     margin: 0 0 0.9rem 0;
+}
+[class*="st-key-m2s_fold_"] button {
+    min-height: 2rem !important;
+    height: 2rem !important;
+    width: 2rem !important;
+    min-width: 2rem !important;
+    padding: 0 !important;
+    border-radius: 8px !important;
+    font-size: 0.95rem !important;
+    line-height: 1 !important;
+}
+[class*="st-key-m2s_fold_"] button p {
+    font-size: 0.95rem !important;
+    line-height: 1 !important;
 }
 .m2s-section-kicker {
     font-size: 0.72rem;
@@ -533,8 +614,10 @@ section[data-testid="stMain"] .block-container {
 /* ---------- sidebar ---------- */
 section[data-testid="stSidebar"] {
     box-sizing: border-box !important;
-    background-color: #0d1117 !important;
-    border-right: 1px solid rgba(240, 246, 252, 0.10);
+    background: var(--m2s-glass-strong) !important;
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    border-right: 1px solid var(--m2s-glass-border);
     min-width: var(--m2s-sidebar) !important;
     width: var(--m2s-sidebar) !important;
     max-width: var(--m2s-sidebar) !important;
@@ -544,6 +627,7 @@ section[data-testid="stSidebar"] > div,
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box !important;
+    background: transparent !important;
 }
 [data-testid="stSidebar"] .block-container { padding-top: calc(var(--m2s-topbar) + 0.35rem); }
 [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarUserContent"] {
@@ -998,6 +1082,70 @@ iframe[height="0"], iframe[height="1"] { display: none !important; }
     overflow: hidden !important;
     position: absolute !important;
 }
+
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+    background-color: rgba(13, 17, 23, 0.94) !important;
+    color: #e6edf3 !important;
+    -webkit-text-fill-color: #e6edf3 !important;
+}
+[data-baseweb="select"] > div,
+[data-baseweb="base-input"] {
+    background-color: rgba(13, 17, 23, 0.94) !important;
+    color: #e6edf3 !important;
+}
+.react-aria-ComboBox > div {
+    background-color: rgba(13, 17, 23, 0.94) !important;
+    color: #e6edf3 !important;
+    border-color: var(--m2s-glass-border) !important;
+}
+.react-aria-ComboBox input {
+    color: #e6edf3 !important;
+    -webkit-text-fill-color: #e6edf3 !important;
+    background: transparent !important;
+}
+.react-aria-ListBox,
+.react-aria-Popover {
+    background-color: rgba(13, 17, 23, 0.96) !important;
+    color: #e6edf3 !important;
+    border: 1px solid var(--m2s-glass-border) !important;
+}
+[data-testid="stMarkdownContainer"] pre,
+.stCode, [data-testid="stCode"] {
+    background-color: rgba(13, 17, 23, 0.9) !important;
+    color: #e6edf3 !important;
+}
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"] {
+    background-color: rgba(13, 17, 23, 0.88) !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    :root {
+        --m2s-glass: #161b22;
+        --m2s-glass-strong: #0d1117;
+        --m2s-glass-blur: 0px;
+    }
+    html[data-m2s-theme="light"] {
+        --m2s-glass: #ffffff;
+        --m2s-glass-strong: #f6f8fa;
+        --m2s-glass-blur: 0px;
+        --m2s-app-bg: #eef2f6;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"],
+    [class*="st-key-m2s_card_"],
+    .m2s-topbar,
+    .m2s-topbar-brand,
+    section[data-testid="stSidebar"],
+    [data-testid="stForm"],
+    [class*="st-key-m2s_next_"] {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+}
 </style>
 """
 
@@ -1011,23 +1159,37 @@ LIGHT_CSS = """
     --m2s-ok: #1a7f37;
     --m2s-warn: #9a6700;
     --m2s-off: #8c959f;
+    --m2s-glass: rgba(255, 255, 255, 0.78);
+    --m2s-glass-strong: rgba(246, 248, 250, 0.86);
+    --m2s-glass-border: rgba(31, 35, 40, 0.14);
+    --m2s-glass-blur: 16px;
+    --m2s-app-bg:
+        radial-gradient(1100px 520px at 8% -8%, rgba(9, 105, 218, 0.14), transparent 58%),
+        radial-gradient(900px 480px at 100% 4%, rgba(8, 145, 178, 0.12), transparent 52%),
+        radial-gradient(740px 420px at 78% 100%, rgba(88, 28, 135, 0.08), transparent 50%),
+        #eef2f6;
 }
 
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-    background-color: #f4f6f8 !important;
+    background: var(--m2s-app-bg) !important;
+    background-attachment: fixed !important;
     color: #1f2328 !important;
     color-scheme: light;
 }
 [data-testid="stHeader"] { background: transparent !important; }
 
 .m2s-topbar {
-    background: #f6f8fa;
-    border-bottom-color: rgba(31, 35, 40, 0.12);
+    background: var(--m2s-glass-strong);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    border-bottom-color: var(--m2s-glass-border);
     color: #1f2328;
 }
 .m2s-topbar-brand {
-    background: #ffffff;
-    border-right-color: rgba(31, 35, 40, 0.12);
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    border-right-color: var(--m2s-glass-border);
 }
 .m2s-topbar-toggle-sep { background: rgba(31, 35, 40, 0.12); }
 .m2s-topbar-toggle {
@@ -1044,25 +1206,27 @@ LIGHT_CSS = """
 .m2s-crumb-sep { color: #57606a; }
 
 [class*="st-key-m2s_next_"] {
-    background: #ffffff;
-    border-color: #d8dce2;
+    background: rgba(255, 255, 255, 0.72);
+    border-color: var(--m2s-glass-border);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
 }
 .m2s-next-title { color: #1f2328; }
 .m2s-next-hint { color: #57606a; }
 .m2s-next-kicker { color: #57606a; }
 .st-key-m2s_next_discovery {
     border-color: rgba(8, 145, 178, 0.38);
-    background: linear-gradient(90deg, rgba(34, 211, 238, 0.14), #ffffff 44%);
+    background: linear-gradient(90deg, rgba(34, 211, 238, 0.18), rgba(255, 255, 255, 0.42) 46%);
 }
 .st-key-m2s_next_discovery .m2s-next-num { background: #0891b2; color: #ffffff; }
 .st-key-m2s_next_transfer {
     border-color: rgba(234, 88, 12, 0.34);
-    background: linear-gradient(90deg, rgba(251, 146, 60, 0.16), #ffffff 44%);
+    background: linear-gradient(90deg, rgba(251, 146, 60, 0.18), rgba(255, 255, 255, 0.42) 46%);
 }
 .st-key-m2s_next_transfer .m2s-next-num { background: #ea580c; color: #ffffff; }
 .st-key-m2s_next_connections {
     border-color: rgba(26, 127, 55, 0.34);
-    background: linear-gradient(90deg, rgba(63, 185, 80, 0.16), #ffffff 44%);
+    background: linear-gradient(90deg, rgba(63, 185, 80, 0.18), rgba(255, 255, 255, 0.42) 46%);
 }
 .st-key-m2s_next_connections .m2s-next-num { background: #1a7f37; color: #ffffff; }
 .st-key-cta_to_connections [data-testid="stPageLink"] a,
@@ -1077,9 +1241,11 @@ LIGHT_CSS = """
 .m2s-crumb-page[data-page="discovery"] { color: #0e7490; }
 .m2s-crumb-page[data-page="transfer"] { color: #c2410c; }
 section[data-testid="stSidebar"] {
-    background-color: #ffffff !important;
+    background: var(--m2s-glass-strong) !important;
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
     color: #1f2328 !important;
-    border-right-color: var(--m2s-border) !important;
+    border-right-color: var(--m2s-glass-border) !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
@@ -1088,14 +1254,27 @@ section[data-testid="stSidebar"] {
 }
 
 .m2s-title, .m2s-section-title { color: #1f2328; }
-[data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stMain"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-    border: 1px solid #8c959f !important;
-    background-color: #ffffff !important;
-    box-shadow: 0 1px 2px rgba(31, 35, 40, 0.08);
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"],
+[class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
+[class*="st-key-nest_on_"],
+[class*="st-key-nest_off_"] {
+    border: 1px solid var(--m2s-glass-border) !important;
+    background: var(--m2s-glass) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.85),
+        0 10px 28px rgba(31, 35, 40, 0.08);
+    backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
 }
 [data-testid="stForm"] {
-    border: 1px solid #8c959f !important;
+    border: 1px solid var(--m2s-glass-border) !important;
+    background: rgba(255, 255, 255, 0.45) !important;
 }
 .m2s-title-connections { border-left-color: #16a34a; }
 .m2s-title-discovery { border-left-color: #0e7490; }
@@ -1353,6 +1532,27 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     background-color: #ffffff !important;
     color: #1f2328 !important;
 }
+.react-aria-ComboBox > div {
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+    border-color: #c5ccd4 !important;
+}
+.react-aria-ComboBox input {
+    color: #1f2328 !important;
+    -webkit-text-fill-color: #1f2328 !important;
+    background: transparent !important;
+}
+.react-aria-ComboBox svg {
+    color: #1f2328 !important;
+    fill: #1f2328 !important;
+    stroke: #1f2328 !important;
+}
+.react-aria-ListBox,
+.react-aria-Popover {
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+    border: 1px solid #c5ccd4 !important;
+}
 [data-testid="stWidgetLabel"] p,
 [data-testid="stMarkdownContainer"] p,
 .stCaption, [data-testid="stCaptionContainer"] {
@@ -1390,6 +1590,15 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     background: #dbeafe !important;
     border-color: #2563eb !important;
     color: #0a3069 !important;
+}
+[data-testid="stMarkdownContainer"] pre,
+.stCode, [data-testid="stCode"] {
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+}
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"] {
+    background-color: #ffffff !important;
 }
 </style>
 """
@@ -1826,3 +2035,49 @@ def card_title(title: str, hint: str | None = None) -> None:
     st.markdown(f'<div class="m2s-card-title">{title}</div>', unsafe_allow_html=True)
     if hint:
         st.markdown(f'<p class="m2s-card-hint">{hint}</p>', unsafe_allow_html=True)
+
+
+@contextmanager
+def collapsible_card(
+    card_id: str,
+    title: str,
+    hint: str | None = None,
+    *,
+    kicker: str | None = None,
+) -> Iterator[None]:
+    """Bordered page block with a small open/collapse control on the title row."""
+    safe_id = re.sub(r"[^0-9A-Za-z_]+", "_", card_id)
+    collapsed_key = f"m2s_collapsed_{safe_id}"
+    collapsed = bool(st.session_state.get(collapsed_key, False))
+    with st.container(border=True, key=f"m2s_card_{safe_id}"):
+        cols = st.columns([14, 1], vertical_alignment="center")
+        with cols[0]:
+            if kicker:
+                st.markdown(
+                    f'<div class="m2s-section-kicker">{kicker}</div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown(
+                f'<div class="{"m2s-section-title" if kicker else "m2s-card-title"}">{title}</div>',
+                unsafe_allow_html=True,
+            )
+        with cols[1]:
+            if st.button(
+                "▸" if collapsed else "▾",
+                key=f"m2s_fold_{safe_id}",
+                help="Kutuyu aç" if collapsed else "Kutuyu daralt",
+            ):
+                st.session_state[collapsed_key] = not collapsed
+                collapsed = not collapsed
+        body_id = f"m2s_card_body_{safe_id}"
+        if collapsed:
+            st.markdown(
+                f"<style>[class*='st-key-{body_id}']{{display:none!important;height:0!important;"
+                f"min-height:0!important;overflow:hidden!important;margin:0!important;"
+                f"padding:0!important;}}</style>",
+                unsafe_allow_html=True,
+            )
+        with st.container(key=body_id):
+            if hint:
+                st.markdown(f'<p class="m2s-card-hint">{hint}</p>', unsafe_allow_html=True)
+            yield

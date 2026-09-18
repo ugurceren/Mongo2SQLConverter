@@ -245,11 +245,11 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
     labels = {field["path"]: _field_label(field) for field in candidates}
     indexed_paths = [item["path"] for item in candidates if item.get("indexed") is True]
 
-    with st.container(border=True):
-        theme.card_title(
-            "Tarih aralığı",
-            "Yalnız belirli bir dönemin kayıtları aktarılsın.",
-        )
+    with theme.collapsible_card(
+        f"tr_date_{collection}",
+        "Tarih aralığı",
+        "Yalnız belirli bir dönemin kayıtları aktarılsın.",
+    ):
         if not candidates:
             st.caption(
                 "Bu koleksiyonda tarih tipli alan bulunamadı. Tarihler metin olarak "
@@ -482,8 +482,11 @@ def _columns_card(
     if plan is not None:
         plan = apply_table_names(plan, options.get("table_names") or {})
 
-    with st.container(border=True):
-        theme.card_title("Kolonlar", "Aktarılacak kolonları ve alt tabloları seçin.")
+    with theme.collapsible_card(
+        f"tr_cols_{collection}",
+        "Kolonlar",
+        "Aktarılacak kolonları ve alt tabloları seçin.",
+    ):
         if plan is None:
             st.caption(
                 "Kolon listesi koleksiyonun profilinden gelir. Profil alınamadı: "
@@ -619,11 +622,11 @@ def _columns_card(
 
 def _target_card(settings: Settings, collections: list[str]) -> dict:
     options = _defaults(settings)
-    with st.container(border=True):
-        theme.card_title(
-            "Hedef",
-            "Önce koleksiyon ve kök tabloyu seçin. Kırılım sonra sorulur.",
-        )
+    with theme.collapsible_card(
+        "tr_target",
+        "Hedef",
+        "Önce koleksiyon ve kök tabloyu seçin. Kırılım sonra sorulur.",
+    ):
         row = st.columns([2.6, 1.8], vertical_alignment="bottom")
         with row[0]:
             if collections:
@@ -675,8 +678,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
     options["date_filter"] = _date_card(settings, collection, prefs)
 
     st.write("")
-    with st.container(border=True):
-        theme.card_title("Senkron", "Yazma şekli ve profil ayarları.")
+    with theme.collapsible_card("tr_sync", "Senkron", "Yazma şekli ve profil ayarları."):
         mode = st.radio(
             "Senkron",
             ("Tam senkron", "Artımlı"),
@@ -899,12 +901,12 @@ def _scheduler_card(options: dict) -> None:
     table = options.get("table") or ""
     table_names = dict(options.get("table_names") or {})
     cmdline, ps1, bat = _scheduler_command(collection, mode, table, table_names)
-    with st.container(border=True):
-        theme.card_title(
-            "Zamanla",
-            "Windows Görev Zamanlayıcı bu komutu çalıştırır. "
-            "Komut bu koleksiyonun kök tablosuna kilitlenir; başka koleksiyonun adları karışmaz.",
-        )
+    with theme.collapsible_card(
+        f"tr_sched_{collection}",
+        "Zamanla",
+        "Windows Görev Zamanlayıcı bu komutu çalıştırır. "
+        "Komut bu koleksiyonun kök tablosuna kilitlenir; başka koleksiyonun adları karışmaz.",
+    ):
         st.code(cmdline, language="text")
         targets = table or sql_table_ident(collection)
         extra = ", ".join(f"{path}→{name}" for path, name in sorted(table_names.items()))
@@ -946,25 +948,25 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
     }
     nonce_key = f"tr_tables_nonce_{collection}"
     nonce = int(st.session_state.get(nonce_key) or 0)
-    # Root + child sources are part of the key so a new name or nesting does not
-    # replay typed cells onto the wrong rows. Streamlit keeps edits per key.
     sources = ",".join(child["source"] for child in plan["children"])
-    editor_key = f"tr_tables_{collection}_{plan['root']['table']}_{sources}_{nonce}"
     table_count = 1 + len(plan["children"])
     mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
     nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
-    with st.container(border=True):
-        theme.card_title(
-            "Plan",
-            f"<code>{settings.mssql.get('database')}</code> · "
-            f"<code>{plan['schema']}</code> — {table_count} tablo · {mode_label} · "
-            f"{nesting_title}{_range_note(options['date_filter'])}",
-        )
-        new_root, new_overrides, duplicates, needs_reset = table_names_editor(
-            plan, overrides, editor_key=editor_key
+    with theme.collapsible_card(
+        f"tr_tables_{collection}",
+        "Tablo adları",
+        f"<code>{settings.mssql.get('database')}</code> · "
+        f"<code>{plan['schema']}</code> — {table_count} tablo · {mode_label} · "
+        f"{nesting_title}{_range_note(options['date_filter'])}",
+    ):
+        new_root, new_overrides, duplicates = table_names_editor(
+            plan,
+            overrides,
+            editor_key=f"tr_tables_grid_{collection}_{plan['root']['table']}_{sources}_{nonce}",
         )
         st.caption(
-            "SQL adı kolonunu düzenleyin. Boş bırakılan alt tablolar kök addan türemeye devam eder. "
+            "SQL adı kolonunu düzenleyin, ardından **Tablo adlarını kaydet** ile yazın. "
+            "Boş bırakılan alt tablolar kök addan türemeye devam eder. "
             "Adlar PascalCase'e çevrilir; aynı isim iki tabloda kullanılamaz."
         )
         if duplicates:
@@ -972,20 +974,23 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
                 "Bu adlar birden fazla tabloda yazıldı, ikincisi yok sayıldı: "
                 + ", ".join(duplicates)
             )
-    options["table_names"] = new_overrides
-    root_changed = new_root != options["table"]
-    overrides_changed = new_overrides != overrides
-    if root_changed or needs_reset or overrides_changed:
-        if root_changed:
-            # The Kök tablo input already exists this run; Streamlit forbids
-            # writing its widget key now. Apply the name on the next run.
+        saved = st.button(
+            "Tablo adlarını kaydet",
+            type="primary",
+            key=f"tr_tables_save_{collection}_{nonce}",
+            width="stretch",
+        )
+    if saved:
+        options["table_names"] = new_overrides
+        if new_root != options["table"]:
             st.session_state[_pending_table_key(collection)] = new_root
             options["table"] = new_root
-        if needs_reset or root_changed:
-            st.session_state[nonce_key] = nonce + 1
+        st.session_state[nonce_key] = nonce + 1
+        _bump_editor()
         _remember_prefs(collection, options)
+        st.toast("Tablo adları kaydedildi")
         st.rerun()
-    return apply_table_names(plan, new_overrides)
+    return apply_table_names(plan, overrides)
 
 
 def _mongo_cfg(settings: Settings) -> dict[str, Any]:
@@ -1102,8 +1107,11 @@ def _render_result(options: dict, job: transfer_job.JobView) -> None:
         return
     if stats is None:
         return
-    with st.container(border=True):
-        theme.card_title("Sonuç", f"{options['collection']} → {options['schema']}")
+    with theme.collapsible_card(
+        "tr_result",
+        "Sonuç",
+        f"{options['collection']} → {options['schema']}",
+    ):
         cols = st.columns(5)
         cols[0].metric("Mod", mode_label)
         cols[1].metric("Belge", stats.documents)

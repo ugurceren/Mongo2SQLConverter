@@ -14,7 +14,6 @@ from app.ui.services import (
     nesting_card,
     profile_many,
     remember_collection,
-    table_names_editor,
     nesting_widget_key,
 )
 from core.inspect import (
@@ -23,7 +22,7 @@ from core.inspect import (
     render_database_drdl,
     sql_table_ident,
 )
-from core.settings import load_transfer_prefs, save_transfer_prefs
+from core.settings import load_transfer_prefs
 from core.transfer import apply_table_names, retarget_plan
 
 RESULT_KEYS = (
@@ -32,87 +31,38 @@ RESULT_KEYS = (
     "plan",
     "result_name",
     "result_scope",
-    "disc_table_names",
 )
 
 
 def _clear_results() -> None:
     for key in RESULT_KEYS:
         st.session_state.pop(key, None)
-    for key in [item for item in st.session_state if str(item).startswith("disc_table_names_")]:
-        st.session_state.pop(key, None)
-    for key in [item for item in st.session_state if str(item).startswith("disc_tables_nonce_")]:
-        st.session_state.pop(key, None)
 
 
-def _rename_collection_tables(settings: Settings, collection: str) -> None:
-    plan = st.session_state.get("plan")
-    if not isinstance(plan, dict):
-        return
-    overrides = {
-        source: name
-        for source, name in dict(st.session_state.get(f"disc_table_names_{collection}") or {}).items()
-        if source
-    }
-    nonce_key = f"disc_tables_nonce_{collection}"
-    nonce = int(st.session_state.get(nonce_key) or 0)
-    sources = ",".join(child["source"] for child in plan["children"])
-    st.caption("Tablo adları — SQL adı kolonunu düzenleyin. Boş bırakılan alt tablolar kök addan türemeye devam eder.")
-    new_root, new_overrides, duplicates, needs_reset = table_names_editor(
-        plan,
-        overrides,
-        editor_key=f"disc_tables_{collection}_{plan['root']['table']}_{sources}_{nonce}",
-    )
-    st.caption("Adlar PascalCase'e çevrilir. Aynı isim iki tabloda kullanılamaz.")
-    if duplicates:
-        st.warning(
-            "Bu adlar birden fazla tabloda yazıldı, ikincisi yok sayıldı: "
-            + ", ".join(duplicates)
-        )
-    root_changed = new_root != plan["root"]["table"]
-    if root_changed:
-        plan = retarget_plan(
-            plan, schema=settings.schema, root_table=new_root
-        )
-        st.session_state["plan"] = plan
-    st.session_state[f"disc_table_names_{collection}"] = new_overrides
-    database = settings.mongo.get("database") or "database"
-    named = apply_table_names(plan, new_overrides)
-    st.session_state["ddl"] = render_database_ddl([named])
-    st.session_state["drdl"] = render_database_drdl([named], database)
+def _named_plan(settings: Settings, plan: dict, collection: str) -> dict:
     prefs = load_transfer_prefs(collection)
-    if prefs.get("table") != new_root or dict(prefs.get("table_names") or {}) != new_overrides:
-        prefs["table"] = new_root
-        prefs["table_names"] = new_overrides
-        try:
-            save_transfer_prefs(collection, prefs)
-        except OSError as exc:
-            st.caption(f"Tablo adları kaydedilemedi: {exc}")
-    if root_changed or needs_reset:
-        st.session_state[nonce_key] = nonce + 1
-        st.rerun()
+    if prefs.get("table"):
+        plan = retarget_plan(plan, schema=settings.schema, root_table=prefs["table"])
+    return apply_table_names(plan, prefs.get("table_names") or {})
 
 
 def _overview(settings: Settings, collections: list[str]) -> bool:
-    with st.container(border=True):
-        head = st.columns([3.4, 1.1], vertical_alignment="center")
-        with head[0]:
-            theme.card_title(
-                "Kaynak veritabanı",
-                "Kayıtlı Mongo bağlantısından okunur.",
-            )
-        with head[1]:
-            run_database = st.button(
-                "Veritabanı DRDL",
-                type="primary",
-                disabled=not collections,
-                width="stretch",
-                key="disc_database_drdl",
-                help=(
-                    "Tüm koleksiyonları tarar. Aşağıda kırılım seçtiyseniz onu kullanır; "
-                    "yoksa hibrit."
-                ),
-            )
+    with theme.collapsible_card(
+        "disc_db",
+        "Kaynak veritabanı",
+        "Kayıtlı Mongo bağlantısından okunur.",
+    ):
+        run_database = st.button(
+            "Veritabanı DRDL",
+            type="primary",
+            disabled=not collections,
+            width="stretch",
+            key="disc_database_drdl",
+            help=(
+                "Tüm koleksiyonları tarar. Aşağıda kırılım seçtiyseniz onu kullanır; "
+                "yoksa hibrit."
+            ),
+        )
         cols = st.columns([1.4, 1, 1, 1.1], vertical_alignment="bottom")
         cols[0].metric("Veritabanı", settings.mongo.get("database") or "—")
         cols[1].metric("Koleksiyon", len(collections))
@@ -129,11 +79,11 @@ def _overview(settings: Settings, collections: list[str]) -> bool:
 
 
 def _pick_collection(settings: Settings, collections: list[str]) -> tuple[str | None, int]:
-    with st.container(border=True):
-        theme.card_title(
-            "Koleksiyon seç",
-            "Önce kaynağı seçin. Kırılım seçenekleri bu koleksiyona göre sonra sorulur.",
-        )
+    with theme.collapsible_card(
+        "disc_pick",
+        "Koleksiyon seç",
+        "Önce kaynağı seçin. Kırılım seçenekleri bu koleksiyona göre sonra sorulur.",
+    ):
         row = st.columns([2.6, 1.1], vertical_alignment="bottom")
         with row[0]:
             if collections:
@@ -216,25 +166,16 @@ def render(settings: Settings) -> None:
         )
         if plans:
             database = settings.mongo.get("database") or "database"
-            st.session_state["drdl"] = render_database_drdl(plans, database)
             st.session_state["result_name"] = database if whole_db else collection
             st.session_state["result_scope"] = "database" if whole_db else "collection"
             if whole_db:
                 st.session_state.pop("ddl", None)
                 st.session_state.pop("plan", None)
-                st.session_state.pop("disc_table_names", None)
-                st.session_state.pop(f"disc_table_names_{collection}", None)
+                st.session_state["drdl"] = render_database_drdl(plans, database)
             else:
                 plan = plans[0]
-                prefs = load_transfer_prefs(collection)
-                if prefs.get("table"):
-                    plan = retarget_plan(
-                        plan, schema=settings.schema, root_table=prefs["table"]
-                    )
-                names = dict(prefs.get("table_names") or {})
+                named = _named_plan(settings, plan, collection)
                 st.session_state["plan"] = plan
-                st.session_state[f"disc_table_names_{collection}"] = names
-                named = apply_table_names(plan, names)
                 st.session_state["ddl"] = render_database_ddl([named])
                 st.session_state["drdl"] = render_database_drdl([named], database)
             st.success(f"{len(plans)} koleksiyon · {total_docs} belge profillendi")
@@ -251,36 +192,39 @@ def render(settings: Settings) -> None:
 
     name = st.session_state.get("result_name") or "schema"
     st.write("")
-    with st.container(border=True):
-        scope = st.session_state.get("result_scope")
-        theme.card_title(
-            "Çıktı",
-            f"<code>{name}</code> · "
-            f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
-        )
-        if scope == "collection" and "ddl" in st.session_state and "plan" in st.session_state:
-            _rename_collection_tables(settings, name)
-            named = apply_table_names(
-                st.session_state["plan"],
-                st.session_state.get(f"disc_table_names_{name}") or {},
+    scope = st.session_state.get("result_scope")
+    with theme.collapsible_card(
+        "disc_out",
+        "Çıktı",
+        f"<code>{name}</code> · "
+        f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
+    ):
+        if scope == "collection" and "plan" in st.session_state:
+            named = _named_plan(settings, st.session_state["plan"], name)
+            ddl = render_database_ddl([named])
+            database = settings.mongo.get("database") or "database"
+            drdl = render_database_drdl([named], database)
+            st.caption(
+                "Tablo adlarını **SQL aktarımı** sayfasındaki **Tablo adları** kartından "
+                "değiştirip kaydedin; bu çıktı kaydedilen adları kullanır."
             )
             ddl_tab, drdl_tab, plan_tab = st.tabs(["MSSQL Plan", "DRDL", "Plan"])
             with ddl_tab:
                 st.download_button(
                     "DDL indir",
-                    st.session_state["ddl"],
+                    ddl,
                     f"{name}.sql",
                     key="disc_ddl_download",
                 )
-                st.code(st.session_state["ddl"], language="sql")
+                st.code(ddl, language="sql")
             with drdl_tab:
                 st.download_button(
                     "DRDL indir",
-                    st.session_state["drdl"],
+                    drdl,
                     f"{name}.drdl",
                     key="disc_drdl_download",
                 )
-                st.code(st.session_state["drdl"], language="yaml")
+                st.code(drdl, language="yaml")
             with plan_tab:
                 st.json(named, expanded=False)
         else:

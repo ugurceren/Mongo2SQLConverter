@@ -9,6 +9,8 @@ from typing import Any
 
 import streamlit as st
 
+from . import theme
+
 from core.inspect import (
     NESTING_OPTIONS,
     Profile,
@@ -413,15 +415,13 @@ def nesting_choice(
         st.session_state[state_key] = default
     root = root_table or sql_table_ident(collection)
 
-    with st.container(border=True):
-        st.markdown(
-            '<div class="m2s-nest-title">Bu koleksiyon nasıl kırılsın?</div>',
-            unsafe_allow_html=True,
-        )
-        if shape:
-            st.caption(shape_caption(shape))
-        else:
-            st.caption("Seçenekler bu koleksiyondaki dizi ve nesne derinliğine göre gelir.")
+    with theme.collapsible_card(
+        f"nesting_{collection}",
+        "Bu koleksiyon nasıl kırılsın?",
+        shape_caption(shape)
+        if shape
+        else "Seçenekler bu koleksiyondaki dizi ve nesne derinliğine göre gelir.",
+    ):
 
         cols = st.columns(2)
         picked: str | None = None
@@ -484,65 +484,61 @@ def table_names_editor(
     overrides: dict[str, str],
     *,
     editor_key: str,
-) -> tuple[str, dict[str, str], list[str], bool]:
+) -> tuple[str, dict[str, str], list[str]]:
     """
     Let the user rename generated SQL tables.
 
-    Returns (root_table, child_overrides, duplicate_names, needs_reset).
-    Child overrides are keyed by Mongo source path and only kept when they
-    differ from the generated name, so a later kök-tablo rename still updates
-    untouched children. `needs_reset` is true when the grid still shows a raw
-    value that was normalised (PascalCase); the caller must change `editor_key`
-    and rerun, because Streamlit otherwise keeps the typed cell.
+    Returns (root_table, child_overrides, duplicate_names). Child overrides are
+    keyed by Mongo source path and only kept when they differ from the generated
+    name, so a later kök-tablo rename still updates untouched children.
     """
     generated_root = plan["root"]["table"]
-    rows = [
-        {
-            "source": "(kök tablo)",
-            "generated": generated_root,
-            "sql_name": generated_root,
-        }
+    items: list[tuple[str, str, str, str]] = [
+        ("", "(kök tablo)", generated_root, generated_root)
     ]
-    paths = [""]
     for child in plan["children"]:
         generated = child["table"]
         custom = str(overrides.get(child["source"]) or "").strip()
-        rows.append(
-            {
-                "source": child["source"],
-                "generated": generated,
-                "sql_name": sql_table_ident(custom) if custom else generated,
-            }
+        items.append(
+            (
+                child["source"],
+                child["source"],
+                generated,
+                sql_table_ident(custom) if custom else generated,
+            )
         )
-        paths.append(child["source"])
 
-    edited = st.data_editor(
-        rows,
-        key=editor_key,
-        hide_index=True,
-        width="stretch",
-        num_rows="fixed",
-        column_config={
-            "source": st.column_config.TextColumn("kaynak", width="medium"),
-            "generated": st.column_config.TextColumn("üretilen", width="medium"),
-            "sql_name": st.column_config.TextColumn("SQL adı", width="medium"),
-        },
-        disabled=["source", "generated"],
-    )
-    edited_rows = edited if isinstance(edited, list) else edited.to_dict("records")
+    head = st.columns([2, 2, 2.4])
+    head[0].caption("kaynak")
+    head[1].caption("üretilen")
+    head[2].caption("SQL adı")
+
+    typed: list[tuple[str, str, str]] = []
+    for i, (path, source_label, generated, sql_name) in enumerate(items):
+        cols = st.columns([2, 2, 2.4], vertical_alignment="center")
+        cols[0].markdown(f"`{source_label}`")
+        cols[1].markdown(f"`{generated}`")
+        widget_key = f"{editor_key}_{i}"
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = sql_name
+        typed.append(
+            (
+                path,
+                generated,
+                cols[2].text_input(
+                    "SQL adı",
+                    key=widget_key,
+                    label_visibility="collapsed",
+                ),
+            )
+        )
 
     new_root = generated_root
     new_overrides: dict[str, str] = {}
     seen: dict[str, str] = {}
     duplicates: list[str] = []
-    needs_reset = False
-    for path, original, entry in zip(paths, rows, edited_rows):
-        raw = _editor_cell_text(
-            entry, "sql_name", "sql_adı", fallback=original["generated"]
-        )
-        name = sql_table_ident(raw)
-        if raw != name:
-            needs_reset = True
+    for path, generated, raw in typed:
+        name = sql_table_ident(_editor_cell_text({"sql_name": raw}, "sql_name", fallback=generated))
         folded = name.lower()
         if folded in seen:
             duplicates.append(name)
@@ -550,9 +546,9 @@ def table_names_editor(
         seen[folded] = path
         if path == "":
             new_root = name
-        elif name != original["generated"]:
+        elif name != generated:
             new_overrides[path] = name
-    return new_root, new_overrides, duplicates, needs_reset
+    return new_root, new_overrides, duplicates
 
 
 # --------------------------------------------------------------------------
@@ -640,19 +636,26 @@ PLAN_CACHE_KEY = "plan_cache"
 
 
 def plan_signature(options: dict[str, Any], query: dict[str, Any] | None) -> str:
-    """Everything that changes the profiled plan; the column picker is not part of it."""
+    """Everything that changes the profiled shape. Table names are applied later."""
     return "|".join(
         str(part)
         for part in (
             options.get("collection"),
-            options.get("schema"),
-            options.get("table"),
             options.get("nesting"),
             options.get("sample"),
             options.get("allow_null"),
             repr(query),
         )
     )
+
+
+def _materialize_plan(plan: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from core.transfer import relax_nullability, retarget_plan
+
+    plan = retarget_plan(plan, schema=options["schema"], root_table=options["table"])
+    if options.get("allow_null"):
+        plan = relax_nullability(plan)
+    return plan
 
 
 def cached_plan(
@@ -667,35 +670,34 @@ def cached_plan(
     The column picker and the write must agree on one plan, and repeated button
     presses should not re-profile the collection. Column exclusions are applied
     on top of this plan by the caller, so they never invalidate the cache.
+    Renaming the root table retargets the cached profile; it does not scan Mongo
+    again.
     """
-    from core.transfer import relax_nullability, retarget_plan
-
     if not options.get("collection") or not options.get("table"):
         return None
     cache = st.session_state.setdefault(PLAN_CACHE_KEY, {})
     key = plan_signature(options, query)
-    if not force and key in cache:
-        return cache[key]
-
-    plan = profile_one(
-        settings,
-        options["collection"],
-        options["sample"],
-        options["schema"],
-        nesting=options["nesting"],
-        query=query,
-    )
-    plan = retarget_plan(plan, schema=options["schema"], root_table=options["table"])
-    if options.get("allow_null"):
-        plan = relax_nullability(plan)
-    cache[key] = plan
-    return plan
+    if force or key not in cache:
+        cache[key] = profile_one(
+            settings,
+            options["collection"],
+            options["sample"],
+            options["schema"],
+            nesting=options["nesting"],
+            query=query,
+        )
+    return _materialize_plan(cache[key], options)
 
 
 def stored_plan(options: dict[str, Any], query: dict[str, Any] | None = None) -> dict | None:
     """Already-profiled plan for these options, or None. Never reads Mongo."""
     cache = st.session_state.get(PLAN_CACHE_KEY) or {}
-    return cache.get(plan_signature(options, query))
+    raw = cache.get(plan_signature(options, query))
+    if raw is None:
+        return None
+    if not options.get("table"):
+        return None
+    return _materialize_plan(raw, options)
 
 
 def invalidate_plans() -> None:
