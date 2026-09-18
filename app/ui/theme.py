@@ -542,19 +542,19 @@ section[data-testid="stMain"] .block-container {
 }
 
 /* ---------- cards ---------- */
-[data-testid="stMain"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-    border-radius: 16px;
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
     backdrop-filter: none !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"],
-[class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
-[class*="st-key-nest_on_"],
-[class*="st-key-nest_off_"] {
+[data-testid="stVerticalBlock"][class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
+[data-testid="stVerticalBlock"][class*="st-key-nest_on_"],
+[data-testid="stVerticalBlock"][class*="st-key-nest_off_"] {
     border-radius: 16px;
     background: var(--m2s-glass) !important;
+    background-color: var(--m2s-glass) !important;
     border: 1px solid var(--m2s-glass-border) !important;
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.07),
@@ -1097,11 +1097,13 @@ iframe[height="0"], iframe[height="1"] { display: none !important; }
     background-color: rgba(13, 17, 23, 0.94) !important;
     color: #e6edf3 !important;
 }
+[data-testid="stSelectbox"] .react-aria-ComboBox > div,
 .react-aria-ComboBox > div {
     background-color: rgba(13, 17, 23, 0.94) !important;
     color: #e6edf3 !important;
     border-color: var(--m2s-glass-border) !important;
 }
+[data-testid="stSelectbox"] .react-aria-ComboBox input,
 .react-aria-ComboBox input {
     color: #e6edf3 !important;
     -webkit-text-fill-color: #e6edf3 !important;
@@ -1254,18 +1256,19 @@ section[data-testid="stSidebar"] {
 }
 
 .m2s-title, .m2s-section-title { color: #1f2328; }
-[data-testid="stMain"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
     backdrop-filter: none !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"],
-[class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
-[class*="st-key-nest_on_"],
-[class*="st-key-nest_off_"] {
+[data-testid="stVerticalBlock"][class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
+[data-testid="stVerticalBlock"][class*="st-key-nest_on_"],
+[data-testid="stVerticalBlock"][class*="st-key-nest_off_"] {
     border: 1px solid var(--m2s-glass-border) !important;
     background: var(--m2s-glass) !important;
+    background-color: var(--m2s-glass) !important;
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.85),
         0 10px 28px rgba(31, 35, 40, 0.08);
@@ -1532,11 +1535,13 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     background-color: #ffffff !important;
     color: #1f2328 !important;
 }
+[data-testid="stSelectbox"] .react-aria-ComboBox > div,
 .react-aria-ComboBox > div {
     background-color: #ffffff !important;
     color: #1f2328 !important;
     border-color: #c5ccd4 !important;
 }
+[data-testid="stSelectbox"] .react-aria-ComboBox input,
 .react-aria-ComboBox input {
     color: #1f2328 !important;
     -webkit-text-fill-color: #1f2328 !important;
