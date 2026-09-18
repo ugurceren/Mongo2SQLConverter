@@ -16,7 +16,7 @@ CSS = """
 :root {
     --m2s-accent: #4c8dff;
     --m2s-accent-soft: rgba(76, 141, 255, 0.14);
-    --m2s-border: rgba(240, 246, 252, 0.16);
+    --m2s-border: rgba(240, 246, 252, 0.32);
     --m2s-muted: #9aa6b4;
     --m2s-ok: #3fb950;
     --m2s-warn: #d29922;
@@ -27,7 +27,8 @@ CSS = """
     --m2s-nav: 220px;
     --m2s-glass: rgba(22, 27, 34, 0.78);
     --m2s-glass-strong: rgba(13, 17, 23, 0.86);
-    --m2s-glass-border: rgba(240, 246, 252, 0.16);
+    --m2s-glass-border: rgba(148, 163, 184, 0.28);
+    --m2s-frame: rgba(148, 163, 184, 0.28);
     --m2s-glass-blur: 16px;
     --m2s-app-bg:
         radial-gradient(1100px 520px at 8% -8%, rgba(76, 141, 255, 0.22), transparent 58%),
@@ -381,8 +382,8 @@ section[data-testid="stMain"] .block-container {
     overflow: hidden;
     margin-top: 1.5rem;
     padding: 1.05rem 1.2rem 1.15rem 1.4rem;
-    border: 1px solid var(--m2s-border);
-    border-radius: 14px;
+    border: 1.5px solid var(--m2s-border);
+    border-radius: 10px;
     background:
         radial-gradient(130% 150% at 0% 0%, rgba(240, 246, 252, 0.08), transparent 62%),
         rgba(22, 27, 34, 0.55);
@@ -552,21 +553,33 @@ section[data-testid="stMain"] .block-container {
 [data-testid="stVerticalBlock"][class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
 [data-testid="stVerticalBlock"][class*="st-key-nest_on_"],
 [data-testid="stVerticalBlock"][class*="st-key-nest_off_"] {
-    border-radius: 16px;
+    border-radius: 10px !important;
     background: var(--m2s-glass) !important;
     background-color: var(--m2s-glass) !important;
-    border: 1px solid var(--m2s-glass-border) !important;
+    border: 1px solid var(--m2s-frame) !important;
+    outline: none;
+    position: relative !important;
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.07),
-        0 10px 32px rgba(0, 0, 0, 0.22);
+        0 10px 28px rgba(0, 0, 0, 0.28),
+        0 1px 0 rgba(255, 255, 255, 0.06) !important;
     backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
     -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
+    overflow: visible !important;
 }
 [data-testid="stForm"] {
     background: rgba(13, 17, 23, 0.35) !important;
-    border: 1px solid var(--m2s-glass-border) !important;
+    border: 1px solid var(--m2s-frame) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18) !important;
     backdrop-filter: blur(12px) saturate(130%);
     -webkit-backdrop-filter: blur(12px) saturate(130%);
+}
+[class*="st-key-m2s_card_"] [data-testid="stForm"] {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
 }
 .m2s-card-title {
     font-size: 0.74rem;
@@ -575,25 +588,88 @@ section[data-testid="stMain"] .block-container {
     color: var(--m2s-muted);
     font-weight: 600;
     margin-bottom: 0.15rem;
+    padding-right: 2rem;
 }
 .m2s-card-hint {
     color: var(--m2s-muted);
     font-size: 0.85rem;
     margin: 0 0 0.9rem 0;
 }
-[class*="st-key-m2s_fold_"] button {
-    min-height: 2rem !important;
-    height: 2rem !important;
-    width: 2rem !important;
-    min-width: 2rem !important;
+[class*="st-key-m2s_foldwrap_"] {
+    position: absolute !important;
+    top: 8px !important;
+    right: 8px !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    max-width: 22px !important;
+    height: 22px !important;
+    margin: 0 !important;
     padding: 0 !important;
-    border-radius: 8px !important;
-    font-size: 0.95rem !important;
-    line-height: 1 !important;
+    z-index: 5 !important;
 }
+[class*="st-key-m2s_foldwrap_"] [data-testid="stVerticalBlock"],
+[class*="st-key-m2s_foldwrap_"] .stButton,
+[class*="st-key-m2s_fold_"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 22px !important;
+    min-width: 22px !important;
+}
+[class*="st-key-m2s_fold_"] [data-testid="stWidgetLabel"],
+[class*="st-key-m2s_fold_"] label,
+[class*="st-key-m2s_foldwrap_"] [data-testid="stWidgetLabel"] {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+[class*="st-key-m2s_foldwrap_"] button,
+[class*="st-key-m2s_fold_"] button,
+[class*="st-key-m2s_foldwrap_"] [data-testid="stBaseButton-secondary"],
+[class*="st-key-m2s_fold_"] [data-testid="stBaseButton-secondary"],
+[class*="st-key-m2s_foldwrap_"] .stButton > button {
+    min-height: 22px !important;
+    height: 22px !important;
+    max-height: 22px !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    max-width: 22px !important;
+    padding: 0 !important;
+    border-radius: 6px !important;
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
+    line-height: 20px !important;
+    background: rgba(33, 38, 45, 0.9) !important;
+    background-image: none !important;
+    border: 1px solid rgba(148, 163, 184, 0.28) !important;
+    color: #8b98a9 !important;
+    box-shadow: none !important;
+    flex: 0 0 22px !important;
+}
+[class*="st-key-m2s_foldwrap_"] button:hover,
+[class*="st-key-m2s_fold_"] button:hover {
+    background: rgba(48, 54, 61, 0.95) !important;
+    border-color: rgba(148, 163, 184, 0.45) !important;
+    color: #c8d1dc !important;
+}
+[class*="st-key-m2s_foldwrap_"] button p,
 [class*="st-key-m2s_fold_"] button p {
-    font-size: 0.95rem !important;
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
     line-height: 1 !important;
+    color: inherit !important;
+    margin: 0 !important;
+}
+.m2s-card-kicker {
+    font-size: 1.44rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7af0ff;
+    font-weight: 800;
+    line-height: 1.15;
+    margin: 0.15rem 0 0.1rem 0;
+    padding-right: 2rem;
 }
 .m2s-section-kicker {
     font-size: 0.72rem;
@@ -609,6 +685,7 @@ section[data-testid="stMain"] .block-container {
     letter-spacing: -0.03em;
     line-height: 1.15;
     margin: 0 0 0.35rem 0;
+    padding-right: 2rem;
 }
 
 /* ---------- sidebar ---------- */
@@ -910,6 +987,23 @@ section[data-testid="stSidebar"] > div,
     border-radius: 8px;
     font-weight: 550;
 }
+[class*="st-key-m2s_foldwrap_"] button,
+[class*="st-key-m2s_fold_"] button,
+[class*="st-key-m2s_fold_"] [data-testid="stBaseButton-secondary"] {
+    min-height: 22px !important;
+    height: 22px !important;
+    max-height: 22px !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    max-width: 22px !important;
+    padding: 0 !important;
+    border-radius: 6px !important;
+    background: rgba(33, 38, 45, 0.9) !important;
+    background-image: none !important;
+    border: 1px solid rgba(148, 163, 184, 0.28) !important;
+    color: #8b98a9 !important;
+    box-shadow: none !important;
+}
 .st-key-mongo_test button,
 .st-key-sql_test button {
     background-color: var(--m2s-accent-soft) !important;
@@ -1156,14 +1250,15 @@ LIGHT_CSS = """
 :root {
     --m2s-accent: #0969da;
     --m2s-accent-soft: rgba(9, 105, 218, 0.12);
-    --m2s-border: #c5ccd4;
+    --m2s-border: #8c959f;
     --m2s-muted: #57606a;
     --m2s-ok: #1a7f37;
     --m2s-warn: #9a6700;
     --m2s-off: #8c959f;
     --m2s-glass: rgba(255, 255, 255, 0.78);
     --m2s-glass-strong: rgba(246, 248, 250, 0.86);
-    --m2s-glass-border: rgba(31, 35, 40, 0.14);
+    --m2s-glass-border: rgba(31, 35, 40, 0.12);
+    --m2s-frame: rgba(31, 35, 40, 0.12);
     --m2s-glass-blur: 16px;
     --m2s-app-bg:
         radial-gradient(1100px 520px at 8% -8%, rgba(9, 105, 218, 0.14), transparent 58%),
@@ -1266,19 +1361,44 @@ section[data-testid="stSidebar"] {
 [data-testid="stVerticalBlock"][class*="st-key-m2s_card_"]:not([class*="st-key-m2s_card_body_"]),
 [data-testid="stVerticalBlock"][class*="st-key-nest_on_"],
 [data-testid="stVerticalBlock"][class*="st-key-nest_off_"] {
-    border: 1px solid var(--m2s-glass-border) !important;
+    border: 1px solid var(--m2s-frame) !important;
     background: var(--m2s-glass) !important;
     background-color: var(--m2s-glass) !important;
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.85),
-        0 10px 28px rgba(31, 35, 40, 0.08);
+        0 10px 28px rgba(31, 35, 40, 0.08),
+        0 1px 0 rgba(255, 255, 255, 0.85) !important;
     backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
     -webkit-backdrop-filter: blur(var(--m2s-glass-blur)) saturate(140%);
 }
 [data-testid="stForm"] {
-    border: 1px solid var(--m2s-glass-border) !important;
+    border: 1px solid var(--m2s-frame) !important;
+    border-radius: 10px !important;
     background: rgba(255, 255, 255, 0.45) !important;
+    box-shadow: 0 8px 22px rgba(31, 35, 40, 0.06) !important;
 }
+[class*="st-key-m2s_card_"] [data-testid="stForm"] {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+[class*="st-key-m2s_foldwrap_"] button,
+[class*="st-key-m2s_fold_"] button {
+    background: #f4f6f8 !important;
+    background-image: none !important;
+    border: 1px solid rgba(31, 35, 40, 0.14) !important;
+    color: #656d76 !important;
+    box-shadow: none !important;
+}
+[class*="st-key-m2s_foldwrap_"] button:hover,
+[class*="st-key-m2s_fold_"] button:hover {
+    background: #eaeef2 !important;
+    border-color: rgba(31, 35, 40, 0.22) !important;
+    color: #1f2328 !important;
+}
+[class*="st-key-m2s_fold_"] button p {
+    color: inherit !important;
+}
+.m2s-card-kicker { color: #0550ae; }
 .m2s-title-connections { border-left-color: #16a34a; }
 .m2s-title-discovery { border-left-color: #0e7490; }
 .m2s-title-transfer { border-left-color: #c2410c; }
@@ -2055,25 +2175,46 @@ def collapsible_card(
     collapsed_key = f"m2s_collapsed_{safe_id}"
     collapsed = bool(st.session_state.get(collapsed_key, False))
     with st.container(border=True, key=f"m2s_card_{safe_id}"):
-        cols = st.columns([14, 1], vertical_alignment="center")
-        with cols[0]:
-            if kicker:
-                st.markdown(
-                    f'<div class="m2s-section-kicker">{kicker}</div>',
-                    unsafe_allow_html=True,
+        with st.container(key=f"m2s_foldwrap_{safe_id}"):
+            label = "▸" if collapsed else "▾"
+            help_txt = "Kutuyu aç" if collapsed else "Kutuyu daralt"
+            kwargs = {"key": f"m2s_fold_{safe_id}", "help": help_txt}
+            clicked = False
+            try:
+                clicked = st.button(
+                    label,
+                    type="secondary",
+                    label_visibility="collapsed",
+                    width="content",
+                    **kwargs,
                 )
-            st.markdown(
-                f'<div class="{"m2s-section-title" if kicker else "m2s-card-title"}">{title}</div>',
-                unsafe_allow_html=True,
-            )
-        with cols[1]:
-            if st.button(
-                "▸" if collapsed else "▾",
-                key=f"m2s_fold_{safe_id}",
-                help="Kutuyu aç" if collapsed else "Kutuyu daralt",
-            ):
+            except TypeError:
+                try:
+                    clicked = st.button(
+                        label,
+                        type="secondary",
+                        use_container_width=False,
+                        **kwargs,
+                    )
+                except TypeError:
+                    clicked = st.button(label, **kwargs)
+            if clicked:
                 st.session_state[collapsed_key] = not collapsed
                 collapsed = not collapsed
+        if kicker:
+            st.markdown(
+                f'<div class="m2s-card-kicker">{kicker}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div class="m2s-section-title">{title}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="m2s-card-title">{title}</div>',
+                unsafe_allow_html=True,
+            )
         body_id = f"m2s_card_body_{safe_id}"
         if collapsed:
             st.markdown(
