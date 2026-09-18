@@ -599,10 +599,10 @@ section[data-testid="stMain"] .block-container {
     position: absolute !important;
     top: 8px !important;
     right: 8px !important;
-    width: 22px !important;
-    min-width: 22px !important;
-    max-width: 22px !important;
-    height: 22px !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
     margin: 0 !important;
     padding: 0 !important;
     z-index: 5 !important;
@@ -612,8 +612,8 @@ section[data-testid="stMain"] .block-container {
 [class*="st-key-m2s_fold_"] {
     margin: 0 !important;
     padding: 0 !important;
-    width: 22px !important;
-    min-width: 22px !important;
+    width: 28px !important;
+    min-width: 28px !important;
 }
 [class*="st-key-m2s_fold_"] [data-testid="stWidgetLabel"],
 [class*="st-key-m2s_fold_"] label,
@@ -629,37 +629,52 @@ section[data-testid="stMain"] .block-container {
 [class*="st-key-m2s_foldwrap_"] [data-testid="stBaseButton-secondary"],
 [class*="st-key-m2s_fold_"] [data-testid="stBaseButton-secondary"],
 [class*="st-key-m2s_foldwrap_"] .stButton > button {
-    min-height: 22px !important;
-    height: 22px !important;
-    max-height: 22px !important;
-    width: 22px !important;
-    min-width: 22px !important;
-    max-width: 22px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    max-height: 28px !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
     padding: 0 !important;
-    border-radius: 6px !important;
-    font-size: 0.7rem !important;
+    border-radius: 7px !important;
+    font-size: 0.85rem !important;
     font-weight: 600 !important;
-    line-height: 20px !important;
+    line-height: 26px !important;
     background: rgba(33, 38, 45, 0.9) !important;
     background-image: none !important;
     border: 1px solid rgba(148, 163, 184, 0.28) !important;
     color: #8b98a9 !important;
     box-shadow: none !important;
-    flex: 0 0 22px !important;
+    flex: 0 0 28px !important;
 }
 [class*="st-key-m2s_foldwrap_"] button:hover,
-[class*="st-key-m2s_fold_"] button:hover {
-    background: rgba(48, 54, 61, 0.95) !important;
-    border-color: rgba(148, 163, 184, 0.45) !important;
-    color: #c8d1dc !important;
+[class*="st-key-m2s_fold_"] button:hover,
+[class*="st-key-m2s_foldwrap_"] [data-testid="stBaseButton-secondary"]:hover,
+[class*="st-key-m2s_fold_"] [data-testid="stBaseButton-secondary"]:hover {
+    background: #2563eb !important;
+    background-image: none !important;
+    border-color: #60a5fa !important;
+    color: #ffffff !important;
 }
 [class*="st-key-m2s_foldwrap_"] button p,
-[class*="st-key-m2s_fold_"] button p {
-    font-size: 0.7rem !important;
+[class*="st-key-m2s_fold_"] button p,
+[class*="st-key-m2s_foldwrap_"] button:hover p,
+[class*="st-key-m2s_fold_"] button:hover p {
+    font-size: 0.85rem !important;
     font-weight: 600 !important;
     line-height: 1 !important;
     color: inherit !important;
     margin: 0 !important;
+}
+[data-testid="stTooltipContent"],
+[data-testid="stTooltipContent"] *,
+[role="tooltip"],
+[role="tooltip"] *,
+div[data-baseweb="tooltip"],
+div[data-baseweb="tooltip"] * {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    fill: #ffffff !important;
 }
 .m2s-card-kicker {
     font-size: 1.44rem;
@@ -987,17 +1002,31 @@ section[data-testid="stSidebar"] > div,
     border-radius: 8px;
     font-weight: 550;
 }
+/* Selectboxes fill their column like stretch buttons (same width as "Bağlantıyı dene"). */
+[data-testid="stSelectbox"],
+[data-testid="stSelectbox"] > div,
+[data-testid="stSelectbox"] .react-aria-ComboBox,
+[data-testid="stSelectbox"] .react-aria-ComboBox > div[role="group"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+[data-testid="stSelectbox"] .react-aria-ComboBox > div[role="group"] {
+    min-height: 40px !important;
+    height: 40px !important;
+    border-radius: 8px !important;
+}
 [class*="st-key-m2s_foldwrap_"] button,
 [class*="st-key-m2s_fold_"] button,
 [class*="st-key-m2s_fold_"] [data-testid="stBaseButton-secondary"] {
-    min-height: 22px !important;
-    height: 22px !important;
-    max-height: 22px !important;
-    width: 22px !important;
-    min-width: 22px !important;
-    max-width: 22px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    max-height: 28px !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
     padding: 0 !important;
-    border-radius: 6px !important;
+    border-radius: 7px !important;
     background: rgba(33, 38, 45, 0.9) !important;
     background-image: none !important;
     border: 1px solid rgba(148, 163, 184, 0.28) !important;
@@ -1242,6 +1271,76 @@ iframe[height="0"], iframe[height="1"] { display: none !important; }
         -webkit-backdrop-filter: none !important;
     }
 }
+
+html[data-m2s-theme="light"],
+html[data-m2s-theme="light"] body,
+html[data-m2s-theme="light"] .stApp {
+    color-scheme: light !important;
+}
+html[data-m2s-theme="light"] [data-testid="stTooltipHoverTarget"] svg,
+html[data-m2s-theme="light"] [data-testid="stTooltipIcon"] svg,
+html[data-m2s-theme="light"] [aria-label^="Help"] svg {
+    fill: none !important;
+    stroke: #0969da !important;
+    color: #0969da !important;
+}
+html[data-m2s-theme="light"] [data-testid="stTooltipHoverTarget"] button,
+html[data-m2s-theme="light"] [aria-label^="Help"] {
+    background: transparent !important;
+    color: #0969da !important;
+}
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] button,
+html[data-m2s-theme="light"] [class*="st-key-m2s_fold_"] button,
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] [data-testid="stBaseButton-secondary"] {
+    background: #f4f6f8 !important;
+    background-image: none !important;
+    border: 1px solid rgba(31, 35, 40, 0.18) !important;
+    color: #424a53 !important;
+}
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] button:hover,
+html[data-m2s-theme="light"] [class*="st-key-m2s_fold_"] button:hover,
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] [data-testid="stBaseButton-secondary"]:hover {
+    background: #0969da !important;
+    border-color: #0550ae !important;
+    color: #ffffff !important;
+}
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] button p,
+html[data-m2s-theme="light"] [class*="st-key-m2s_fold_"] button p,
+html[data-m2s-theme="light"] [class*="st-key-m2s_foldwrap_"] button:hover p,
+html[data-m2s-theme="light"] [class*="st-key-m2s_fold_"] button:hover p {
+    color: inherit !important;
+}
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] input[type="checkbox"],
+html[data-m2s-theme="light"] .stCheckbox input[type="checkbox"] {
+    accent-color: #0969da !important;
+}
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] [class*="ew2p8o3"]:not(:has(svg)),
+html[data-m2s-theme="light"] .stCheckbox [class*="ew2p8o3"]:not(:has(svg)),
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] label > div:first-of-type:not(:has(svg)) {
+    background-color: #ffffff !important;
+    border-color: #0969da !important;
+}
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] [class*="ew2p8o3"]:has(svg),
+html[data-m2s-theme="light"] .stCheckbox [class*="ew2p8o3"]:has(svg),
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] label > div:first-of-type:has(svg) {
+    background-color: #0969da !important;
+    border-color: #0969da !important;
+}
+html[data-m2s-theme="light"] [data-testid="stCheckbox"] [class*="ew2p8o3"] svg,
+html[data-m2s-theme="light"] .stCheckbox [class*="ew2p8o3"] svg {
+    fill: none !important;
+    stroke: #ffffff !important;
+}
+html[data-m2s-theme="light"] [data-testid="stTooltipContent"],
+html[data-m2s-theme="light"] [data-testid="stTooltipContent"] *,
+html[data-m2s-theme="light"] [role="tooltip"],
+html[data-m2s-theme="light"] [role="tooltip"] *,
+html[data-m2s-theme="light"] div[data-baseweb="tooltip"],
+html[data-m2s-theme="light"] div[data-baseweb="tooltip"] * {
+    background: #0969da !important;
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
 </style>
 """
 
@@ -1271,7 +1370,7 @@ LIGHT_CSS = """
     background: var(--m2s-app-bg) !important;
     background-attachment: fixed !important;
     color: #1f2328 !important;
-    color-scheme: light;
+    color-scheme: light !important;
 }
 [data-testid="stHeader"] { background: transparent !important; }
 
@@ -1391,12 +1490,35 @@ section[data-testid="stSidebar"] {
 }
 [class*="st-key-m2s_foldwrap_"] button:hover,
 [class*="st-key-m2s_fold_"] button:hover {
-    background: #eaeef2 !important;
-    border-color: rgba(31, 35, 40, 0.22) !important;
-    color: #1f2328 !important;
+    background: #0969da !important;
+    border-color: #0550ae !important;
+    color: #ffffff !important;
 }
-[class*="st-key-m2s_fold_"] button p {
+[class*="st-key-m2s_fold_"] button p,
+[class*="st-key-m2s_foldwrap_"] button:hover p,
+[class*="st-key-m2s_fold_"] button:hover p {
     color: inherit !important;
+}
+[data-testid="stCheckbox"] input[type="checkbox"],
+.stCheckbox input[type="checkbox"] {
+    accent-color: #0969da !important;
+}
+[data-testid="stCheckbox"] [class*="ew2p8o3"]:not(:has(svg)),
+.stCheckbox [class*="ew2p8o3"]:not(:has(svg)),
+[data-testid="stCheckbox"] label > div:first-of-type:not(:has(svg)) {
+    background-color: #ffffff !important;
+    border-color: #0969da !important;
+}
+[data-testid="stCheckbox"] [class*="ew2p8o3"]:has(svg),
+.stCheckbox [class*="ew2p8o3"]:has(svg),
+[data-testid="stCheckbox"] label > div:first-of-type:has(svg) {
+    background-color: #0969da !important;
+    border-color: #0969da !important;
+}
+[data-testid="stCheckbox"] [class*="ew2p8o3"] svg,
+.stCheckbox [class*="ew2p8o3"] svg {
+    fill: none !important;
+    stroke: #ffffff !important;
 }
 .m2s-card-kicker { color: #0550ae; }
 .m2s-title-connections { border-left-color: #16a34a; }
@@ -1579,9 +1701,10 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     color: #ffffff !important;
 }
 
-/* Streamlit itself stays on Dark; its chrome icons are frost-white. */
+/* Streamlit itself stays on Dark; keep help/chrome icons as outlines in light. */
 [data-testid="stTooltipHoverTarget"] button,
 [data-testid="stTooltipHoverTarget"] svg,
+[data-testid="stTooltipIcon"] svg,
 [data-testid="stTextInput"] button,
 [data-testid="stTextInput"] button [data-testid="stIconMaterial"],
 [data-testid="stNumberInput"] button,
@@ -1592,10 +1715,16 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
 [data-testid="stHeadingWithActionElements"] a,
 [data-testid="stHeaderActionElements"] svg,
 [data-testid="stFileUploaderDropzone"] button {
-    color: #57606a !important;
-    -webkit-text-fill-color: #57606a !important;
-    fill: #57606a !important;
-    stroke: #57606a !important;
+    color: #0969da !important;
+    -webkit-text-fill-color: #0969da !important;
+    stroke: #0969da !important;
+}
+[data-testid="stTooltipHoverTarget"] svg,
+[data-testid="stTooltipIcon"] svg,
+[data-testid="stTooltipHoverTarget"] button svg {
+    fill: none !important;
+    stroke: #0969da !important;
+    color: #0969da !important;
 }
 [data-testid="stTooltipHoverTarget"] button:disabled,
 [data-testid="stTextInput"] button:disabled,
@@ -1627,6 +1756,41 @@ button[data-testid="stBaseButton-primaryFormSubmit"] p {
     color: #1f2328 !important;
     -webkit-text-fill-color: #1f2328 !important;
     background-color: #ffffff !important;
+}
+[data-testid="stTextInputRootElement"],
+[data-testid="stNumberInputContainer"],
+[data-testid="stTextArea"] [data-baseweb="base-input"],
+[data-testid$="RootElement"] {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #1f2328 !important;
+    border-color: #d0d7de !important;
+    color-scheme: light !important;
+}
+[data-testid="stTooltipHoverTarget"] button,
+[data-testid="stTooltipIcon"] button,
+[data-testid="stTextInput"] button,
+[data-testid="stNumberInput"] button {
+    background: transparent !important;
+    background-image: none !important;
+    color: #0969da !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+[data-testid="stTooltipHoverTarget"] button svg,
+[data-testid="stTooltipIcon"] svg,
+[data-testid="stTextInput"] button svg,
+[data-testid="stNumberInput"] button svg,
+.react-aria-ComboBox button,
+.react-aria-ComboBox svg {
+    color: #0969da !important;
+    fill: none !important;
+    stroke: #0969da !important;
+}
+[data-testid="stTooltipHoverTarget"] button:hover svg,
+[data-testid="stTooltipIcon"] button:hover svg {
+    stroke: #0550ae !important;
+    color: #0550ae !important;
 }
 [data-testid="stTextInput"] input::placeholder,
 [data-testid="stNumberInput"] input::placeholder,
@@ -2174,14 +2338,21 @@ def collapsible_card(
     safe_id = re.sub(r"[^0-9A-Za-z_]+", "_", card_id)
     collapsed_key = f"m2s_collapsed_{safe_id}"
     collapsed = bool(st.session_state.get(collapsed_key, False))
+
+    def _toggle_card(key: str = collapsed_key) -> None:
+        st.session_state[key] = not bool(st.session_state.get(key, False))
+
     with st.container(border=True, key=f"m2s_card_{safe_id}"):
         with st.container(key=f"m2s_foldwrap_{safe_id}"):
             label = "▸" if collapsed else "▾"
             help_txt = "Kutuyu aç" if collapsed else "Kutuyu daralt"
-            kwargs = {"key": f"m2s_fold_{safe_id}", "help": help_txt}
-            clicked = False
+            kwargs = {
+                "key": f"m2s_fold_{safe_id}",
+                "help": help_txt,
+                "on_click": _toggle_card,
+            }
             try:
-                clicked = st.button(
+                st.button(
                     label,
                     type="secondary",
                     label_visibility="collapsed",
@@ -2190,17 +2361,17 @@ def collapsible_card(
                 )
             except TypeError:
                 try:
-                    clicked = st.button(
+                    st.button(
                         label,
                         type="secondary",
                         use_container_width=False,
                         **kwargs,
                     )
                 except TypeError:
-                    clicked = st.button(label, **kwargs)
-            if clicked:
-                st.session_state[collapsed_key] = not collapsed
-                collapsed = not collapsed
+                    kwargs.pop("on_click", None)
+                    if st.button(label, **kwargs):
+                        st.session_state[collapsed_key] = not collapsed
+                        collapsed = not collapsed
         if kicker:
             st.markdown(
                 f'<div class="m2s-card-kicker">{kicker}</div>',

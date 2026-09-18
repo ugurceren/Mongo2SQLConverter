@@ -316,6 +316,7 @@ def _sql_card(settings: Settings) -> None:
                 SQL_AUTH_ORDER,
                 format_func=lambda mode: SQL_AUTH_LABELS[mode],
                 key="sql_auth_mode",
+                width="stretch",
                 help=(
                     "Yazma yetkisi olan hesabı burada seçersiniz. Windows modları "
                     "Trusted_Connection, diğerleri kullanıcı adı + şifre kullanır."
@@ -329,6 +330,7 @@ def _sql_card(settings: Settings) -> None:
                 "ODBC sürücü",
                 drivers,
                 index=drivers.index(current),
+                width="stretch",
                 help="Listede kurulu olmayan sürücüler de görünür; kurulu olanı seçin.",
             )
 
@@ -365,7 +367,8 @@ def _sql_card(settings: Settings) -> None:
                 st.warning("Bu mod `pywin32` ister: `pip install pywin32`", icon=":material/download:")
 
         st.write("")
-        transport = st.columns([1.4, 1.6, 2.0], vertical_alignment="bottom")
+        conn_grid = [1, 1, 2]
+        transport = st.columns(conn_grid, vertical_alignment="bottom")
         with transport[0]:
             encrypt_default = str(settings.mssql.get("encrypt") or "default")
             if encrypt_default not in ENCRYPT_ORDER:
@@ -375,6 +378,7 @@ def _sql_card(settings: Settings) -> None:
                 ENCRYPT_ORDER,
                 index=ENCRYPT_ORDER.index(encrypt_default),
                 format_func=lambda mode: ENCRYPT_LABELS[mode],
+                width="stretch",
                 help="Driver 18 varsayılan olarak şifreler ve sertifikayı doğrular.",
             )
         with transport[1]:
@@ -391,7 +395,7 @@ def _sql_card(settings: Settings) -> None:
                     "Sertifikaya güvenin ya da Driver 17 seçin."
                 )
 
-        actions = st.columns([1, 1, 2])
+        actions = st.columns(conn_grid)
         with actions[0]:
             do_test = st.button("Bağlantıyı dene", key="sql_test", width="stretch")
         with actions[1]:
