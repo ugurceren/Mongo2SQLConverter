@@ -730,9 +730,11 @@ def build_plan(
             continue
         groups.setdefault(owner, []).append(stat)
 
-    def columns_for(owner: str) -> list[dict[str, Any]]:
+    def columns_for(owner: str, reserved: tuple[str, ...] = ()) -> list[dict[str, Any]]:
         out = []
-        used: set[str] = set()
+        # SQL Server compares column names without case (`city` and `City`
+        # are one column), and the key / index columns are taken already.
+        used: set[str] = {name.lower() for name in reserved}
         for stat in groups.get(owner, []):
             as_json = stat.path in json_parents and stat.path not in shape_conflicts
             sql, notes = sql_type_for(
@@ -742,9 +744,10 @@ def build_plan(
                 as_json=as_json,
             )
             name = column_name(stat.path, owner)
-            while name in used:
-                name = name + "_x"
-            used.add(name)
+            if not (owner == "" and stat.path == "_id"):  # `_id` is always mongo_id
+                while name.lower() in used:
+                    name = name + "_x"
+            used.add(name.lower())
             fill = profile.fill_ratio(stat)
             out.append(
                 {
@@ -776,7 +779,7 @@ def build_plan(
                 "idx_columns": idx_columns(element_prefix),
                 "max_array_len": array_stat.array_max_len,
                 "total_elements": array_stat.array_total,
-                "columns": columns_for(element_prefix),
+                "columns": columns_for(element_prefix, (parent_key, *idx_columns(element_prefix))),
             }
         )
 
@@ -811,7 +814,7 @@ def build_plan(
         "collection": collection,
         "documents": profile.documents,
         "nesting": nesting,
-        "root": {"table": root_table, "key_column": "mongo_id", "columns": columns_for("")},
+        "root": {"table": root_table, "key_column": "mongo_id", "columns": columns_for("", ("mongo_id",))},
         "children": children,
     }
 
