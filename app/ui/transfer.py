@@ -1253,6 +1253,14 @@ def _render_result(options: dict, job: transfer_job.JobView) -> None:
         if stats.first_load:
             st.caption("İlk yükleme: hedef tablolar boştu, parti silmeleri atlandı.")
         st.caption(f"Günlük · `{log_path_display()}`")
+        if stats.read_seconds or stats.sql_seconds:
+            megabytes = stats.read_bytes / 1_000_000
+            speed = f", {megabytes / stats.read_seconds:.2f} MB/sn" if stats.read_seconds else ""
+            st.caption(
+                f"Süre dağılımı · Mongo okuma {stats.read_seconds:,.0f} sn ({megabytes:,.1f} MB{speed}) · "
+                f"düzleştirme {stats.flatten_seconds:,.0f} sn · SQL ekleme {stats.insert_seconds:,.0f} sn · "
+                f"commit {stats.commit_seconds:,.0f} sn. Okuma ile yazma aynı anda sürer."
+            )
         if stats.last_id:
             st.caption(f"İşaret `_id` = `{stats.last_id}`")
         if stats.widened:

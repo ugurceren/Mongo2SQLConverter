@@ -32,6 +32,31 @@ def _value_at(doc: dict[str, Any] | None, path: str) -> Any:
     return current
 
 
+def wire_compressors(uri: str | None) -> str | None:
+    """
+    Compressors to offer the server, or None when the URI names its own.
+
+    Every BSON document repeats its field names, so reads shrink several times
+    over on the wire; that is most of a transfer's traffic on a slow link. A
+    server that supports none of them simply answers uncompressed. zstd and
+    snappy are offered only when this pymongo can use them.
+    """
+    if "compressors=" in (uri or "").lower():
+        return None
+    names: list[str] = []
+    try:
+        from pymongo import compression_support as support
+
+        if support._have_zstd():
+            names.append("zstd")
+        if support._have_snappy():
+            names.append("snappy")
+    except Exception:  # private helpers: a newer pymongo may move them
+        pass
+    names.append("zlib")
+    return ",".join(names)
+
+
 class MongoClientWrapper:
     def __init__(
         self,
@@ -49,6 +74,7 @@ class MongoClientWrapper:
         # A transfer waits longer for a server and sets socket timeouts, so a
         # half-open connection becomes an error it can retry, not a hang.
         self.long_running = long_running
+        self.compressors: str | None = None  # what `connect` offered the server
         self._client: MongoClient | None = None
 
     def connect(self) -> Database:
@@ -63,6 +89,10 @@ class MongoClientWrapper:
         if self.long_running:
             kwargs["connectTimeoutMS"] = 20000
             kwargs["socketTimeoutMS"] = 360000  # just above the reader's maxTimeMS
+        compressors = wire_compressors(self.uri)
+        if compressors:
+            kwargs["compressors"] = compressors
+        self.compressors = compressors or "URI"
         if self.username:
             kwargs["username"] = self.username
             kwargs["password"] = self.password

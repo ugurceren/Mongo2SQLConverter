@@ -218,7 +218,15 @@ Aşama hızlarından toplam süre tahmin edilir. İş başladıktan sonra `logs/
 | `commit_rows`, `commit_mb` | 20000, 16 | Yazma partisi (belge sayısı), bu satır sayısı ya da bu boyut, hangisi önce dolarsa commit edilir. |
 | `prefetch` | `true` | SQL yazarken sonraki partiyi ayrı bir iş parçacığında okur ve düzleştirir. |
 
-**Ağ.** Mongo ile arasında yavaş bir hat varsa URI'ye `compressors=zstd,zlib` ekleyin (örn. `mongodb://host/?compressors=zstd,zlib`). `zstd` için `pip install zstandard` gerekir; paket yoksa `zlib` kullanılır.
+**Ağ ve hız.** Veri Mongo'dan işi çalıştıran makineye, oradan SQL Server'a gider. Bu yüzden hızı çoğu zaman o makinenin sunuculara bağlantısı belirler: VPN, Wi-Fi ya da başka bir ofis üzerinden saniyede birkaç yüz belge, aynı veri merkezinde ise binlerce belge beklenir. Büyük işleri sunuculara yakın bir makinede **Zamanla** komutuyla çalıştırın.
+
+- Mongo trafiği varsayılan olarak sıkıştırılır. zlib her zaman kullanılabilir; zstd, pymongo bu Python'da kullanabiliyorsa önce denenir (Python 3.14 ile pymongo 4.17'de ek paket gerekmez). URI'de `compressors=` yazarsanız o kullanılır. Sunucu sıkıştırmayı desteklemiyorsa bağlantı sıkıştırmasız devam eder.
+- Günlükteki ilerleme ve bitiş satırları süreyi ayırır:
+  - Mongo tarafı: `okuma_sn`, `okuma_mb`, `okuma_mb_sn`.
+  - İşlemci: `düzleştirme_sn`.
+  - SQL: `ekleme_sn` ve `commit_sn`.
+- Okuma ile yazma aynı anda sürdüğü için bu süreler toplamı aşar. İkisi de toplam süreye yakın ve MB/sn düşükse darboğaz ağdır.
+- Aynı özet, arayüzdeki Sonuç kartında "Süre dağılımı" olarak görünür. Ön kontrol de iki tarafın MB/sn değerini ölçer.
 
 **SQL Server log'u.** Recovery model FULL ise transaction log yalnız log yedeğiyle boşalır. Uzun bir yüklemede DBA'nın sık log yedeği planlaması gerekir. Araç recovery model'i değiştirmez.
 

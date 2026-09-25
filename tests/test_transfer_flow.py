@@ -236,6 +236,24 @@ class LoadTests(FlowCase):
         self.assertEqual(flow.server.commit_faults, {})
         self.assertEqual(flow.server.insert_faults, {})
 
+    def test_time_split_is_counted_and_logged(self):
+        lines: list[str] = []
+        handler = logging.Handler()
+        handler.emit = lambda record: lines.append(record.getMessage())
+        QUIET.addHandler(handler)
+        level = QUIET.level
+        QUIET.setLevel(logging.INFO)
+        self.addCleanup(QUIET.removeHandler, handler)
+        self.addCleanup(QUIET.setLevel, level)
+        _, stats, _ = self.flow.run()
+        self.assertEqual(stats.read_bytes, sum(len(entry.raw) for entry in self.flow.store.entries))
+        self.assertGreater(stats.flatten_seconds, 0)
+        self.assertAlmostEqual(stats.insert_seconds + stats.commit_seconds, stats.sql_seconds, places=6)
+        finished = next(line for line in lines if line.startswith("aktarım bitti"))
+        for field in ("okuma_sn=", "okuma_mb=", "düzleştirme_sn=", "ekleme_sn=", "commit_sn="):
+            self.assertIn(field, finished)
+        self.assertTrue(any("okuma_mb_sn=" in line for line in lines if line.startswith("aktarım ilerliyor")))
+
     def test_resume_survives_a_fresh_sample(self):
         # The next run profiles another random sample: other widths, same load.
         self.flow.run(should_stop=self.stop_after(500))

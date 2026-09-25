@@ -246,7 +246,9 @@ class WriteStats:
     widened: list[str] = field(default_factory=list)
     slow_tables: set[str] = field(default_factory=set)
     last_id: Any = None
-    sql_seconds: float = 0.0
+    sql_seconds: float = 0.0  # insert + commit of the batches that landed
+    insert_seconds: float = 0.0  # deletes and inserts: bandwidth and server work
+    commit_seconds: float = 0.0  # checkpoint update and commit: round trips and log flushes
 
 
 class BatchWriter:
@@ -455,6 +457,7 @@ class BatchWriter:
                 self._current = table
                 self.ops.insert(table, rows, slow=table in slow_now or table in self.stats.slow_tables)
         self._current = None
+        inserted = time.perf_counter()
         self.ops.advance(
             last_id=units[-1].id,
             docs_done=units[-1].seq,
@@ -466,7 +469,10 @@ class BatchWriter:
         # The batch's reject lines reach the disk before its checkpoint does.
         self.rejects.sync()
         self.ops.commit()
-        self.stats.sql_seconds += time.perf_counter() - started
+        finished = time.perf_counter()
+        self.stats.sql_seconds += finished - started
+        self.stats.insert_seconds += inserted - started
+        self.stats.commit_seconds += finished - inserted
         self._after_commit(units, slow_now)
 
     def _after_commit(self, units: list[Unit], slow_now: set[str]) -> None:

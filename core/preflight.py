@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Callable
 
 import pyodbc
@@ -26,6 +27,28 @@ from core.transfer import plan_column_specs
 from core.writer import rows_per_call
 
 PROBE_DOCS = 5000
+SLOW_LINK_MBPS = 5.0  # a LAN moves tens of MB/s; below this the link is the limit
+
+
+def payload_bytes(rows: list[list[Any]]) -> int:
+    """
+    Rough bytes SQL Server receives for `rows` sent as RPC parameters: each
+    value travels with its type description, NULLs included.
+    """
+    total = 0
+    for row in rows:
+        for value in row:
+            if value is None:
+                total += 9
+            elif isinstance(value, str):
+                total += 12 + 2 * len(value)
+            elif isinstance(value, (bytes, bytearray)):
+                total += 12 + len(value)
+            elif isinstance(value, Decimal):
+                total += 23
+            else:  # bit, int, float, dates
+                total += 13
+    return total
 
 
 @dataclass
@@ -146,6 +169,17 @@ def run_preflight(
         info = client.server_info()
         topology = client.topology_description.topology_type_name
         report.add("ok", "mongo", f"MongoDB {info.get('version')} · {topology}")
+        rtt = []
+        for _ in range(10):
+            tick = time.perf_counter()
+            client.admin.command("ping")
+            rtt.append(time.perf_counter() - tick)
+        report.add(
+            "info",
+            "ağ",
+            f"Mongo gidiş-dönüş ~{1000 * sorted(rtt)[len(rtt) // 2]:.1f} ms · "
+            f"sıkıştırma: {getattr(source, 'compressors', None) or 'yok'}",
+        )
     except Exception as exc:
         report.add("warn", "mongo", f"Sunucu bilgisi okunamadı: {describe(exc)}")
     try:
@@ -349,6 +383,7 @@ def _probe(
         cur = db.conn.cursor()
         for table in tables:
             cur.execute(table.create)
+        payload = 0
         started = time.perf_counter()
         for index, table in enumerate(tables):
             if index == 0:
@@ -357,6 +392,7 @@ def _probe(
                 rows = [row for flat in good for row in flat.children.get(table.table, ())]
             if not rows:
                 continue
+            payload += payload_bytes(rows)
             names = ", ".join(f"[{name}]" for name in table.columns)
             marks = ", ".join("?" for _ in table.columns)
             writer = db.conn.cursor()
@@ -373,6 +409,21 @@ def _probe(
             "geçici tablolara yazılıp geri alındı. tempdb'ye yazmak genelde daha hızlıdır ve commit "
             "süresi dahil değildir; gerçek hız biraz düşük çıkabilir.",
         )
+        read_mbps = sum(item.size for item in items) / 1_000_000 / read_seconds if read_seconds > 0 else None
+        sql_mbps = payload / 1_000_000 / write_seconds if write_seconds > 0 else None
+        report.add(
+            "info",
+            "ağ",
+            f"Mongo'dan ~{read_mbps or 0:.2f} MB/sn okundu, SQL'e ~{sql_mbps or 0:.2f} MB/sn yazıldı (tahmini).",
+        )
+        if read_mbps is not None and sql_mbps is not None and min(read_mbps, sql_mbps) < SLOW_LINK_MBPS:
+            report.add(
+                "warn",
+                "ağ",
+                "Hız ağ sınırında görünüyor: bu makine ile sunucular arasındaki bağlantı yavaş "
+                "(VPN, Wi-Fi ya da uzak ağ). Aktarımı sunuculara yakın bir makinede, örneğin aynı "
+                "veri merkezindeki bir sunucuda Zamanla komutuyla çalıştırmak en büyük kazancı sağlar.",
+            )
     except Exception as exc:
         report.add("warn", "ölçüm", f"Geçici tablolara yazılamadı: {describe(exc)}")
     finally:

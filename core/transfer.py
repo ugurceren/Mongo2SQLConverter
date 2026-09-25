@@ -525,6 +525,13 @@ class TransferStats:
     widened: list[str] = field(default_factory=list)
     slow_tables: list[str] = field(default_factory=list)
     note: str = ""
+    # Where the run's time went; the reading and writing sides overlap.
+    read_bytes: int = 0  # raw BSON received from Mongo
+    read_seconds: float = 0.0  # waiting for Mongo and decoding
+    flatten_seconds: float = 0.0
+    sql_seconds: float = 0.0
+    insert_seconds: float = 0.0
+    commit_seconds: float = 0.0
 
     def add_rows(self, table: str, count: int) -> None:
         if count:
@@ -904,9 +911,16 @@ def transfer_collection(
         devam=run.resume,
         **(log_extra or {}),
     )
-    job.start(beklenen=expected_count, başlangıç=run.docs_done, karar=run.note)
+    job.start(
+        beklenen=expected_count,
+        başlangıç=run.docs_done,
+        karar=run.note,
+        sıkıştırma=getattr(mongo, "compressors", None),
+    )
 
-    read_seconds = [0.0]
+    # Where the time goes, so a log line tells a slow link from a slow server:
+    # the reading side (Mongo wait + decode, then flattening) and bytes read.
+    timing = {"produce": 0.0, "flatten": 0.0, "bytes": 0}
 
     def batches() -> Iterator[list[Unit]]:
         seq = run.docs_done
@@ -915,18 +929,35 @@ def transfer_collection(
         started = time.perf_counter()
         for item in reader:
             seq += 1
+            tick = time.perf_counter()
             unit = _unit(item, seq, flattener)
+            timing["flatten"] += time.perf_counter() - tick
+            timing["bytes"] += unit.size
             batch.append(unit)
             rows += unit.rows
             size += unit.size
             if len(batch) >= batch_docs or rows >= batch_rows or size >= batch_bytes:
-                read_seconds[0] += time.perf_counter() - started
+                timing["produce"] += time.perf_counter() - started
                 yield batch
                 batch, rows, size = [], 0, 0
                 started = time.perf_counter()
-        read_seconds[0] += time.perf_counter() - started
+        timing["produce"] += time.perf_counter() - started
         if batch:
             yield batch
+
+    def time_fields() -> dict[str, Any]:
+        reading = max(timing["produce"] - timing["flatten"], 0.0)
+        megabytes = timing["bytes"] / 1_000_000
+        sql = writer.stats
+        return {
+            "okuma_sn": f"{reading:.0f}",
+            "okuma_mb": f"{megabytes:.1f}",
+            "okuma_mb_sn": f"{megabytes / reading:.2f}" if reading > 0 else None,
+            "düzleştirme_sn": f"{timing['flatten']:.0f}",
+            "sql_sn": f"{sql.sql_seconds:.0f}",
+            "ekleme_sn": f"{sql.insert_seconds:.0f}",
+            "commit_sn": f"{sql.commit_seconds:.0f}",
+        }
 
     def put(q: queue.Queue, item: Any) -> bool:
         while not stop.is_set():
@@ -949,9 +980,9 @@ def transfer_collection(
     samples: deque[tuple[float, int]] = deque()
     done = 0
 
-    def report(batch_len: int) -> None:
+    def report(batch: list[Unit]) -> None:
         nonlocal done
-        done += batch_len
+        done += len(batch)
         now = time.monotonic()
         samples.append((now, done))
         while len(samples) > 2 and now - samples[0][0] > 300:
@@ -968,8 +999,7 @@ def transfer_collection(
             expected_count or 0,
             satır=sum(writer.stats.rows.values()),
             reddedilen=rejects.rejected,
-            okuma_sn=f"{read_seconds[0]:.0f}",
-            sql_sn=f"{writer.stats.sql_seconds:.0f}",
+            **time_fields(),
             kalan=eta,
         )
 
@@ -986,7 +1016,7 @@ def transfer_collection(
             if isinstance(item, _Failure):
                 raise item.exc
             writer.write(item)
-            report(len(item))
+            report(item)
             if stopping():
                 stats.stopped = True
                 break
@@ -1002,6 +1032,9 @@ def transfer_collection(
                     break
             worker.join(timeout=30)
         _fill_stats(stats, writer, rejects, done, mongo_retrier)
+        stats.read_bytes = int(timing["bytes"])
+        stats.read_seconds = max(timing["produce"] - timing["flatten"], 0.0)
+        stats.flatten_seconds = timing["flatten"]
 
     if not stats.stopped and should_stop and should_stop():
         stats.stopped = True
@@ -1015,6 +1048,7 @@ def transfer_collection(
         nulllanan=stats.nulled,
         genişletilen=len(stats.widened),
         yeniden_deneme=stats.retries,
+        **time_fields(),
         last_id=stats.last_id,
     )
     return stats
@@ -1032,6 +1066,9 @@ def _fill_stats(
     stats.nulled = rejects.nulled
     stats.widened = list(written.widened)
     stats.slow_tables = sorted(written.slow_tables)
+    stats.sql_seconds = written.sql_seconds
+    stats.insert_seconds = written.insert_seconds
+    stats.commit_seconds = written.commit_seconds
     stats.retries = writer.retrier.total_retries + mongo_retrier.total_retries
     if written.last_id is not None:
         encoded = encode_mongo_id(written.last_id)
