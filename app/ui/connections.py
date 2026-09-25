@@ -14,6 +14,9 @@ from app.ui.services import (
     invalidate_collections,
     mongo_cfg_from_form,
     mongo_client,
+    mongo_error,
+    record_health,
+    sql_error,
     sql_target,
 )
 from core.mssql import (
@@ -41,6 +44,9 @@ HINT_SQL_USER = "sa"
 HINT_WIN_USER = "DOMAIN\\servis_hesabi"
 
 SQL_AUTH_ORDER = (AUTH_WINDOWS, AUTH_SQL, AUTH_WINDOWS_USER)
+# The SQL card's rows share one grid; the first column holds the long values
+# (server names, auth mode, driver name).
+SQL_GRID = [1.3, 1, 1]
 
 ENCRYPT_LABELS = {
     "default": "Sürücü varsayılanı",
@@ -95,7 +101,7 @@ def _hint_input(
 
 def _mark_saved(label: str) -> None:
     st.session_state[SAVE_FLASH] = label
-    st.toast(f"{label} kaydedildi", icon="✅")
+    st.toast(f"{label} kaydedildi", icon=":material/check_circle:")
 
 
 def _show_saved() -> None:
@@ -109,24 +115,27 @@ def _test_mongo(mongo_cfg: dict) -> None:
     mongo = mongo_client(mongo_cfg)
     try:
         info = mongo.test()
-        collections = info["collections"]
-        st.success(
-            f"Bağlantı kuruldu — `{info['database']}` ({len(collections)} koleksiyon)"
-        )
-        if collections:
-            preview = ", ".join(collections[:12])
-            extra = f" … +{len(collections) - 12}" if len(collections) > 12 else ""
-            st.caption(f"Koleksiyonlar: {preview}{extra}")
-        else:
-            st.warning(
-                f"`{info['database']}` içinde koleksiyon yok. Veritabanı adı yanlış olabilir."
-            )
-        if info["databases"]:
-            st.caption("Erişilebilir veritabanları: " + ", ".join(info["databases"]))
     except Exception as exc:
-        st.error(f"Bağlantı kurulamadı: {exc}")
+        record_health("mongo", mongo_cfg, False)
+        error = mongo_error(exc)
+        theme.error_with_detail(error.summary, error.detail)
+        return
     finally:
         mongo.close()
+
+    record_health("mongo", mongo_cfg, True)
+    collections = info["collections"]
+    st.success(f"Bağlantı kuruldu — `{info['database']}` ({len(collections)} koleksiyon)")
+    if collections:
+        preview = ", ".join(collections[:12])
+        extra = f" … +{len(collections) - 12}" if len(collections) > 12 else ""
+        st.caption(f"Koleksiyonlar: {preview}{extra}")
+    else:
+        st.warning(
+            f"`{info['database']}` içinde koleksiyon yok. Veritabanı adı yanlış olabilir."
+        )
+    if info["databases"]:
+        st.caption("Erişilebilir veritabanları: " + ", ".join(info["databases"]))
 
 
 def _user_help(auth: str) -> str:
@@ -166,16 +175,19 @@ def _auth_note(auth: str) -> str:
     )
 
 
-def _test_sql(target: MssqlConnection) -> None:
+def _test_sql(target: MssqlConnection, payload: dict) -> None:
     try:
         target.connect()
         access = target.test()
     except Exception as exc:
-        st.error(f"Bağlantı kurulamadı: {exc}")
+        record_health("sql", payload, False)
+        error = sql_error(exc)
+        theme.error_with_detail(error.summary, error.detail)
         return
     finally:
         target.close()
 
+    record_health("sql", payload, True)
     st.success(f"Bağlantı kuruldu — {access.database} / oturum: {access.login}")
     roles = ", ".join(access.roles) if access.roles else "rol üyeliği yok"
     schema_note = (
@@ -284,9 +296,10 @@ def _sql_card(settings: Settings) -> None:
         if "sql_auth_mode" not in st.session_state:
             st.session_state["sql_auth_mode"] = settings.sql_auth
 
-        left, right = st.columns(2)
-        with left:
-            st.markdown("**Yazılacak yer**")
+        # Three rows of three: where to write, who writes, how the driver connects.
+        st.markdown("**Yazılacak yer**")
+        place = st.columns(SQL_GRID)
+        with place[0]:
             server = _hint_input(
                 "Sunucu",
                 "sql_server",
@@ -294,6 +307,7 @@ def _sql_card(settings: Settings) -> None:
                 HINT_SQL_SERVER,
                 _EXAMPLE_SQL_SERVER,
             )
+        with place[1]:
             database = _hint_input(
                 "Veritabanı",
                 "sql_db",
@@ -301,6 +315,7 @@ def _sql_card(settings: Settings) -> None:
                 HINT_SQL_DB,
                 _EXAMPLE_SQL_DB,
             )
+        with place[2]:
             schema = _hint_input(
                 "Şema",
                 "sql_schema",
@@ -309,8 +324,10 @@ def _sql_card(settings: Settings) -> None:
                 _EXAMPLE_SQL_SCHEMA,
                 help="Keşif ve aktarım bu şemaya yazar. Diğer sayfalardan değiştirilemez.",
             )
-        with right:
-            st.markdown("**Kimlik doğrulama**")
+
+        st.markdown("**Kimlik doğrulama**")
+        identity = st.columns(SQL_GRID)
+        with identity[0]:
             auth = st.selectbox(
                 "Yöntem",
                 SQL_AUTH_ORDER,
@@ -322,21 +339,10 @@ def _sql_card(settings: Settings) -> None:
                     "Trusted_Connection, diğerleri kullanıcı adı + şifre kullanır."
                 ),
             )
-            drivers = available_drivers()
-            current = settings.mssql.get("driver") or "ODBC Driver 17 for SQL Server"
-            if current not in drivers:
-                drivers = [current, *drivers]
-            driver = st.selectbox(
-                "ODBC sürücü",
-                drivers,
-                index=drivers.index(current),
-                width="stretch",
-                help="Listede kurulu olmayan sürücüler de görünür; kurulu olanı seçin.",
-            )
-
-            needs_user = auth in AUTH_NEEDS_USERNAME
-            needs_password = auth in AUTH_NEEDS_PASSWORD
-            user_hint = HINT_WIN_USER if auth == AUTH_WINDOWS_USER else HINT_SQL_USER
+        needs_user = auth in AUTH_NEEDS_USERNAME
+        needs_password = auth in AUTH_NEEDS_PASSWORD
+        user_hint = HINT_WIN_USER if auth == AUTH_WINDOWS_USER else HINT_SQL_USER
+        with identity[1]:
             user = _hint_input(
                 "Kullanıcı",
                 "sql_user",
@@ -346,6 +352,7 @@ def _sql_card(settings: Settings) -> None:
                 disabled=not needs_user,
                 help=_user_help(auth),
             )
+        with identity[2]:
             password = st.text_input(
                 "Şifre",
                 type="password",
@@ -362,14 +369,25 @@ def _sql_card(settings: Settings) -> None:
                     "tutulur. Domain hesapları için kapalı tutmanız önerilir."
                 ),
             )
-            st.caption(_auth_note(auth))
-            if auth == AUTH_WINDOWS_USER and find_spec("win32security") is None:
-                st.warning("Bu mod `pywin32` ister: `pip install pywin32`", icon=":material/download:")
+        st.caption(_auth_note(auth))
+        if auth == AUTH_WINDOWS_USER and find_spec("win32security") is None:
+            st.warning("Bu mod `pywin32` ister: `pip install pywin32`", icon=":material/download:")
 
-        st.write("")
-        conn_grid = [1, 1, 2]
-        transport = st.columns(conn_grid, vertical_alignment="bottom")
+        st.markdown("**Sürücü ve şifreleme**")
+        transport = st.columns(SQL_GRID, vertical_alignment="bottom")
         with transport[0]:
+            drivers = available_drivers()
+            current = settings.mssql.get("driver") or "ODBC Driver 17 for SQL Server"
+            if current not in drivers:
+                drivers = [current, *drivers]
+            driver = st.selectbox(
+                "ODBC sürücü",
+                drivers,
+                index=drivers.index(current),
+                width="stretch",
+                help="Listede kurulu olmayan sürücüler de görünür; kurulu olanı seçin.",
+            )
+        with transport[1]:
             encrypt_default = str(settings.mssql.get("encrypt") or "default")
             if encrypt_default not in ENCRYPT_ORDER:
                 encrypt_default = "default"
@@ -381,21 +399,21 @@ def _sql_card(settings: Settings) -> None:
                 width="stretch",
                 help="Driver 18 varsayılan olarak şifreler ve sertifikayı doğrular.",
             )
-        with transport[1]:
+        with transport[2]:
             trust_certificate = st.checkbox(
                 "Sunucu sertifikasına doğrulamadan güven",
                 value=bool(settings.mssql.get("trust_certificate", False)),
                 key="sql_trust_cert",
                 help="TrustServerCertificate=yes — kurum CA'sı olmayan iç sunucular için.",
             )
-        with transport[2]:
-            if "18" in driver and encrypt_choice != "no" and not trust_certificate:
-                st.caption(
-                    "Driver 18 + self-signed sertifika, sertifika zinciri hatası verir. "
-                    "Sertifikaya güvenin ya da Driver 17 seçin."
-                )
+        if "18" in driver and encrypt_choice != "no" and not trust_certificate:
+            st.caption(
+                "Driver 18 + self-signed sertifika, sertifika zinciri hatası verir. "
+                "Sertifikaya güvenin ya da Driver 17 seçin."
+            )
 
-        actions = st.columns(conn_grid)
+        st.write("")
+        actions = st.columns([1, 1, 2])
         with actions[0]:
             do_test = st.button("Bağlantıyı dene", key="sql_test", width="stretch")
         with actions[1]:
@@ -416,7 +434,7 @@ def _sql_card(settings: Settings) -> None:
         effective_password = (password or settings.mssql_password) if needs_password else None
 
         if do_test:
-            _test_sql(sql_target(payload, effective_password))
+            _test_sql(sql_target(payload, effective_password), payload)
         if do_save:
             saved = dict(payload)
             if needs_password and store_password:
@@ -439,7 +457,6 @@ def _sql_card(settings: Settings) -> None:
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Yapılandırma",
         "Bağlantılar",
         "Kaynak ve hedef ayrı tutulur: Mongo olmadan hiçbir şey çalışmaz, SQL yalnızca "
         "veri yazarken devreye girer. Kaydet, değerleri bu makinede tutar; git'e yazılmaz.",

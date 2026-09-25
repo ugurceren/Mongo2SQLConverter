@@ -1,6 +1,7 @@
 pymongo>=4.6,<5
 pyodbc>=5.0
 PyYAML>=6.0
-streamlit>=1.32
+# The theme switch writes Streamlit's own theme cache; re-check it before moving past 1.61.
+streamlit>=1.61,<1.62
 # "Windows - baska hesap" SQL modu domain hesabini taklit etmek icin kullanir.
 pywin32>=306; sys_platform == "win32"

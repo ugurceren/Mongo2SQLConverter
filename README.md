@@ -61,6 +61,14 @@ python run.py
 
 Aktarım ve profil satırları `logs/mongo2sql.log` dosyasına yazılır (başlangıç, ilerleme, bitiş, hata). Dosya 10 MB olunca döner. `logs/` git'e eklenmez.
 
+Üst şeritteki ay/güneş düğmesi Streamlit'in kendi koyu/açık temasını seçer (`.streamlit/config.toml` içindeki `[theme.dark]` / `[theme.light]`). Seçim bu tarayıcıda kalır; geçişte sayfa bir kez yenilenir, arka planda süren aktarım etkilenmez. Seçim yapılmamışsa işletim sisteminin teması kullanılır.
+
+Tema değişikliklerini veritabanı olmadan denemek için galeri:
+
+```powershell
+python -m streamlit run tools/ui_gallery.py --server.port 8512
+```
+
 **CLI (aktarım / Görev Zamanlayıcı):**
 
 ```powershell
@@ -141,6 +149,7 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 - `app/ui/connections.py` — Baglantilar sayfasi
 - `tools/infer_schema.py` — sema CLI
 - `tools/run_transfer.py` — aktarım CLI (Görev Zamanlayıcı)
+- `tools/ui_gallery.py` — tema galerisi: arayüz bileşenleri statik veriyle, iki temada
 
 ## Ayirma
 

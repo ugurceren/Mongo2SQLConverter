@@ -1,16 +1,35 @@
 [theme]
+# Fallback only: the light and dark variants below decide, and the top-bar
+# switch picks one of them.
 base = "dark"
-primaryColor = "#4c8dff"
+showWidgetBorder = true
+headingFontSizes = ["1.75rem", "1.25rem", "1.125rem"]
+headingFontWeights = [700, 600, 600]
+metricValueFontSize = "1.5rem"
+metricValueFontWeight = 600
 
 [theme.dark]
+# White button text needs 4.5:1, so the primary is darker than the link blue.
+primaryColor = "#2563eb"
 backgroundColor = "#0d1117"
 secondaryBackgroundColor = "#161b22"
 textColor = "#e6edf3"
+borderColor = "#3d444d"
+linkColor = "#4c8dff"
+greenColor = "#3fb950"
+yellowColor = "#d29922"
+redColor = "#f85149"
 
 [theme.light]
+primaryColor = "#0969da"
 backgroundColor = "#f6f8fa"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#1f2328"
+borderColor = "#d0d7de"
+linkColor = "#0969da"
+greenColor = "#1a7f37"
+yellowColor = "#9a6700"
+redColor = "#cf222e"
 
 [theme.dark.sidebar]
 backgroundColor = "#0d1117"

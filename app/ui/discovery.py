@@ -52,29 +52,35 @@ def _overview(settings: Settings, collections: list[str]) -> bool:
         "Kaynak veritabanı",
         "Kayıtlı Mongo bağlantısından okunur.",
     ):
-        run_database = st.button(
-            "Veritabanı DRDL",
-            type="primary",
-            disabled=not collections,
-            width="stretch",
-            key="disc_database_drdl",
-            help=(
-                "Tüm koleksiyonları tarar. Aşağıda kırılım seçtiyseniz onu kullanır; "
-                "yoksa hibrit."
-            ),
-        )
-        cols = st.columns([1.4, 1, 1, 1.1], vertical_alignment="bottom")
+        cols = st.columns([1.4, 1, 1])
         cols[0].metric("Veritabanı", settings.mongo.get("database") or "—")
         cols[1].metric("Koleksiyon", len(collections))
-        cols[2].metric("Şema hedefi", settings.schema)
-        with cols[3]:
+        cols[2].metric(
+            "Şema hedefi",
+            settings.schema,
+            help="Şema yalnız **Bağlantılar** sayfasında değişir.",
+        )
+        actions = st.columns([1.3, 1, 1.7])
+        with actions[0]:
+            run_database = st.button(
+                "Tüm veritabanı için DRDL",
+                icon=":material/database:",
+                disabled=not collections,
+                width="stretch",
+                key="disc_database_drdl",
+                help=(
+                    "Tüm koleksiyonları tarar. Aşağıda kırılım seçtiyseniz onu kullanır; "
+                    "yoksa hibrit."
+                ),
+            )
+        with actions[1]:
             st.button(
                 "Listeyi yenile",
+                icon=":material/refresh:",
                 key="disc_refresh",
                 on_click=invalidate_collections,
                 width="stretch",
             )
-        st.caption("Şema yalnız **Bağlantılar** sayfasında değişir.")
     return run_database
 
 
@@ -108,24 +114,17 @@ def _pick_collection(settings: Settings, collections: list[str]) -> tuple[str | 
                 key="disc_sample",
                 help=(
                     "Şema için kaç belge taransın. 5000 önerilir: hızlı ve tipik şekil için yeterli. "
-                    "0 = koleksiyonun tamamı; uzunluklar kesin olur, büyük koleksiyonda yavaştır."
+                    "0 = koleksiyonun tamamı; uzunluklar kesin olur, büyük koleksiyonda yavaştır. "
+                    "Örneklemede max uzunluklar alt sınırdır; görünmeyen daha uzun değerler kesilebilir."
                 ),
             )
-        st.caption(
-            "Örnek yalnız şema ölçümü içindir; **5000 önerilir**. "
-            "**0 = tam tarama** (kesin genişlik, yavaş). "
-            "Örneklemede max uzunluklar alt sınırdır — görünmeyen daha uzun değerler kesilebilir."
-        )
         collection_count_caption(settings, collection, int(sample))
-        if not collection:
-            st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
     remember_collection(collection)
     return collection, int(sample)
 
 
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Keşif",
         "Şema keşfi",
         "Koleksiyonları ölçerek DRDL ve MSSQL şema önerisi üretir. Belge okur, "
         "hiçbir yere yazmaz; SQL bağlantısı gerekmez.",
@@ -139,7 +138,7 @@ def render(settings: Settings) -> None:
     run_database = _overview(settings, collections)
 
     if error:
-        st.error(error)
+        theme.error_with_detail(error.summary, error.detail)
     elif warning:
         st.warning(warning)
 
@@ -196,8 +195,7 @@ def render(settings: Settings) -> None:
     with theme.collapsible_card(
         "disc_out",
         "Çıktı",
-        f"<code>{name}</code> · "
-        f"{'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
+        f"`{name}` · {'tüm veritabanı (DRDL)' if scope == 'database' else 'tek koleksiyon'}",
     ):
         if scope == "collection" and "plan" in st.session_state:
             named = _named_plan(settings, st.session_state["plan"], name)
@@ -208,7 +206,7 @@ def render(settings: Settings) -> None:
                 "Tablo adlarını **SQL aktarımı** sayfasındaki **Tablo adları** kartından "
                 "değiştirip kaydedin; bu çıktı kaydedilen adları kullanır."
             )
-            ddl_tab, drdl_tab, plan_tab = st.tabs(["MSSQL Plan", "DRDL", "Plan"])
+            ddl_tab, drdl_tab, plan_tab = st.tabs(["MSSQL DDL", "DRDL", "Plan (JSON)"])
             with ddl_tab:
                 st.download_button(
                     "DDL indir",

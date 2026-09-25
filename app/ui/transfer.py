@@ -22,6 +22,7 @@ from app.ui.services import (
     format_int,
     invalidate_sql_watermarks,
     nesting_card,
+    record_health,
     remember_collection,
     sql_table_watermark,
     stored_plan,
@@ -651,14 +652,13 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 "Kök tablo",
                 key=_table_widget_key(collection) if collection else "tr_table_none",
                 disabled=not collection,
-                help="PascalCase yazılır. Alt tablolar bu addan türer; her tabloyu Plan kartından ayrıca adlandırabilirsiniz.",
+                help=(
+                    "PascalCase yazılır. Alt tablolar bu addan türer; her tabloyu **Tablo adları** "
+                    f"kartından ayrıca adlandırabilirsiniz. Hedef şema `{settings.schema}`; "
+                    "şema yalnız **Bağlantılar** sayfasında değişir."
+                ),
             )
-        st.caption(
-            f"Hedef şema `{settings.schema}` — yalnız **Bağlantılar** sayfasında değişir."
-        )
-        if not collection:
-            st.caption("Koleksiyon seçildikten sonra iç içe yapı sorulur.")
-        else:
+        if collection:
             collection_count_caption(settings, collection)
 
     options["collection"] = collection
@@ -766,12 +766,6 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 key=f"tr_null_{collection}",
                 help="Örnekle profillenen alanlar başka belgelerde eksik olabilir.",
             )
-        st.caption(
-            "Profil örneği yalnız kolon tipi ve genişliği içindir; **5000 önerilir**. "
-            "**0 = tam tarama** (kesin genişlik). "
-            "Yazma partisi SQL'e kaç belgelik paket halinde yazılacağını ayarlar. "
-            "İkisi de kaç belgenin aktarılacağını değiştirmez; onu senkron seçimi belirler."
-        )
 
     options.update(
         {
@@ -950,14 +944,10 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
     nonce = int(st.session_state.get(nonce_key) or 0)
     sources = ",".join(child["source"] for child in plan["children"])
     table_count = 1 + len(plan["children"])
-    mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
-    nesting_title = nesting_labels().get(plan.get("nesting") or "", plan.get("nesting") or "")
     with theme.collapsible_card(
         f"tr_tables_{collection}",
         "Tablo adları",
-        f"<code>{settings.mssql.get('database')}</code> · "
-        f"<code>{plan['schema']}</code> — {table_count} tablo · {mode_label} · "
-        f"{nesting_title}{_range_note(options['date_filter'])}",
+        f"`{settings.mssql.get('database')}` · `{plan['schema']}` — {table_count} tablo",
     ):
         new_root, new_overrides, duplicates = table_names_editor(
             plan,
@@ -988,7 +978,7 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
         st.session_state[nonce_key] = nonce + 1
         _bump_editor()
         _remember_prefs(collection, options)
-        st.toast("Tablo adları kaydedildi")
+        st.toast("Tablo adları kaydedildi", icon=":material/check_circle:")
         st.rerun()
     return apply_table_names(plan, overrides)
 
@@ -1009,6 +999,8 @@ def _consume_finished_job(job: transfer_job.JobView) -> bool:
     st.session_state[JOB_SEQ_KEY] = job.seq
     if job.status == "done":
         st.session_state[RUN_DONE_KEY] = job.signature
+        for kind, cfg in job.connections.items():
+            record_health(kind, cfg, True)
     invalidate_sql_watermarks()
     return True
 
@@ -1103,21 +1095,23 @@ def _render_result(options: dict, job: transfer_job.JobView) -> None:
     if job.status == "cancelled":
         st.warning("Aktarım durduruldu. Yazılmış partiler SQL'de kaldı.")
     if job.status == "error":
-        st.error(job.error or job.message)
+        theme.error_with_detail(
+            "Aktarım yarıda kaldı. Ayrıntı günlükte de var.", job.error or job.message
+        )
         return
     if stats is None:
         return
     with theme.collapsible_card(
         "tr_result",
         "Sonuç",
-        f"{options['collection']} → {options['schema']}",
+        f"`{options['collection']}` → `{options['schema']}`",
     ):
         cols = st.columns(5)
-        cols[0].metric("Mod", mode_label)
-        cols[1].metric("Belge", stats.documents)
-        cols[2].metric("Satır", stats.total_rows)
-        cols[3].metric("Atlanan", stats.skipped_no_id)
-        cols[4].metric("Kırpılan", stats.truncated)
+        cols[0].metric("Mod", mode_label, border=True)
+        cols[1].metric("Belge", format_int(stats.documents), border=True)
+        cols[2].metric("Satır", format_int(stats.total_rows), border=True)
+        cols[3].metric("Atlanan", format_int(stats.skipped_no_id), border=True)
+        cols[4].metric("Kırpılan", format_int(stats.truncated), border=True)
         if stats.first_load:
             st.caption("İlk yükleme: hedef tablo boştu, parti silmeleri atlandı.")
         st.caption(f"Günlük · `{log_path_display()}`")
@@ -1142,22 +1136,117 @@ def _render_result(options: dict, job: transfer_job.JobView) -> None:
         )
 
 
+def _run_summary(settings: Settings, options: dict, selected: dict | None) -> str:
+    """One line saying what the run button will do."""
+    collection = options["collection"]
+    if selected is None:
+        return f"`{collection}` · plan hazır olunca aktarım açılır."
+    target = ".".join(
+        part
+        for part in (settings.mssql.get("database"), selected["schema"], selected["root"]["table"])
+        if part
+    )
+    nesting = selected.get("nesting") or ""
+    parts = [
+        f"`{collection}` → `{target}`",
+        f"{1 + len(selected['children'])} tablo",
+        "Artımlı" if options["mode"] == "incremental" else "Tam senkron",
+        nesting_labels().get(nesting, nesting),
+    ]
+    dropped = []
+    if options["columns"]["exclude"]:
+        dropped.append(f"{len(options['columns']['exclude'])} kolon")
+    if options["columns"]["exclude_tables"]:
+        dropped.append(f"{len(options['columns']['exclude_tables'])} alt tablo")
+    if dropped:
+        parts.append(", ".join(dropped) + " hariç")
+    date_note = _range_note(options["date_filter"]).lstrip(" ·")
+    if date_note:
+        parts.append(date_note)
+    return " · ".join(part for part in parts if part)
+
+
+def _run_card(settings: Settings, options: dict, selected: dict | None) -> None:
+    """Summary, run/stop buttons and live progress in one place."""
+    job = transfer_job.snapshot()
+    ready = bool(settings.sql_ready and selected is not None)
+    busy = transfer_job.is_busy()
+    finished = st.session_state.get(RUN_DONE_KEY) == _run_signature(options)
+    write_label = "Artımlı senkron" if options["mode"] == "incremental" else "Tam senkron"
+
+    with theme.collapsible_card(
+        "tr_run", "Çalıştır", _run_summary(settings, options, selected), foldable=False
+    ):
+        actions = st.columns([1.6, 1.6, 2.8], vertical_alignment="center")
+        with actions[0]:
+            st.button(
+                write_label,
+                key="tr_do_write",
+                type="primary",
+                icon=":material/play_arrow:",
+                disabled=not ready or busy or finished,
+                on_click=_request_run,
+                width="stretch",
+                help="Eksik tabloları oluşturur, sonra belgeleri yazar. Sayfa değiştirmek durdurmaz.",
+            )
+        with actions[1]:
+            if busy:
+                st.button(
+                    "Aktarımı durdur",
+                    key="tr_do_stop",
+                    icon=":material/stop:",
+                    on_click=_request_stop,
+                    disabled=job.status != "running",
+                    width="stretch",
+                    help="Açık yazma partisi bitince durur.",
+                )
+            elif finished:
+                st.button(
+                    "Yeniden çalıştır",
+                    key="tr_do_again",
+                    icon=":material/replay:",
+                    on_click=_request_run,
+                    width="stretch",
+                )
+        with actions[2]:
+            if busy:
+                st.caption("Aktarım arka planda sürüyor. Sayfa değiştirmek durdurmaz.")
+            elif finished:
+                st.caption("Bu ayarlarla aktarım tamamlandı. Bir ayarı değiştirin ya da yeniden çalıştırın.")
+            elif not ready:
+                st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
+
+        if busy:
+
+            @st.fragment(run_every=1.5)
+            def _live() -> None:
+                live = transfer_job.snapshot()
+                if live.status in {"running", "stopping"}:
+                    st.progress(_progress_fraction(live))
+                    st.caption(_progress_caption(live))
+                    if live.message:
+                        st.caption(live.message)
+                    return
+                if _consume_finished_job(live):
+                    st.rerun()
+
+            _live()
+        st.caption(
+            f"Günlük `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır."
+        )
+
+
 def render(settings: Settings) -> None:
     theme.page_header(
-        "Aktarım",
         "SQL aktarımı",
         "Tam senkron tüm koleksiyonu yazar. Artımlı, SQL tablosundaki son `_id` "
         "sonrası yeni belgeleri ekler; eski kayıtlardaki güncelleme için tam senkron gerekir.",
         step="transfer",
     )
-    st.caption(
-        f"Aktarım günlüğü `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır. "
-        "Başladıktan sonra başka sayfaya geçmek aktarımı durdurmaz; durdurmak için **Aktarımı durdur**."
-    )
 
     collections, error, warning = collection_list(settings)
     if error:
-        st.error(error)
+        theme.error_with_detail(error.summary, error.detail)
     elif warning:
         st.warning(warning)
 
@@ -1180,7 +1269,7 @@ def render(settings: Settings) -> None:
         try:
             plan = cached_plan(settings, options, _date_query(options["date_filter"]))
         except Exception as exc:
-            st.error(f"Koleksiyon profillenemedi: {exc}")
+            theme.error_with_detail("Koleksiyon profillenemedi.", str(exc))
 
     if options["collection"]:
         st.write("")
@@ -1204,78 +1293,22 @@ def render(settings: Settings) -> None:
 
     job = transfer_job.snapshot()
     _consume_finished_job(job)
-    ready = bool(settings.sql_ready and selected is not None)
-    signature = _run_signature(options)
-    busy = transfer_job.is_busy()
-    finished = st.session_state.get(RUN_DONE_KEY) == signature
-    write_label = "Artımlı senkron" if options["mode"] == "incremental" else "Tam senkron"
 
     if options["collection"]:
         st.write("")
-        actions = st.columns([1.6, 1.6, 2.8], vertical_alignment="bottom")
-        with actions[0]:
-            st.button(
-                write_label,
-                key="tr_do_write",
-                type="primary",
-                disabled=not ready or busy or finished,
-                on_click=_request_run,
-                width="stretch",
-                help="Eksik tabloları oluşturur, sonra belgeleri yazar. Sayfa değiştirmek durdurmaz.",
-            )
-        with actions[1]:
-            if busy:
-                st.button(
-                    "Aktarımı durdur",
-                    key="tr_do_stop",
-                    on_click=_request_stop,
-                    disabled=job.status != "running",
-                    width="stretch",
-                    help="Açık yazma partisi bitince durur.",
-                )
-            elif finished:
-                st.button(
-                    "Yeniden çalıştır",
-                    key="tr_do_again",
-                    on_click=_request_run,
-                    width="stretch",
-                )
-        with actions[2]:
-            if busy:
-                st.caption("Aktarım arka planda sürüyor. Sayfa değiştirmek durdurmaz.")
-            elif finished:
-                st.caption("Bu ayarlarla aktarım tamamlandı. Bir ayarı değiştirin ya da yeniden çalıştırın.")
-            elif not ready:
-                st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
+        _run_card(settings, options, selected)
 
     _launch_if_requested(settings, options, selected)
+
+    if not transfer_job.is_busy() and job.collection == (options.get("collection") or "") and (
+        job.status in {"done", "error", "cancelled"}
+    ):
+        st.write("")
+        _render_result(options, job)
 
     if options.get("collection"):
         st.write("")
         _scheduler_card(options)
-
-    if busy:
-
-        @st.fragment(run_every=1.5)
-        def _live() -> None:
-            live = transfer_job.snapshot()
-            if live.status in {"running", "stopping"}:
-                st.progress(_progress_fraction(live))
-                st.caption(_progress_caption(live))
-                if live.message:
-                    st.caption(live.message)
-                return
-            if _consume_finished_job(live):
-                st.rerun()
-
-        _live()
-    elif job.collection == (options.get("collection") or "") and job.status in {
-        "done",
-        "error",
-        "cancelled",
-    }:
-        st.write("")
-        _render_result(options, job)
 
     if PLAN_KEY in st.session_state:
         with st.expander("Üretilen DDL", expanded=False):

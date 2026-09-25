@@ -38,9 +38,16 @@ class JobView:
     existing: list[str] = field(default_factory=list)
     error: str | None = None
     stats: TransferStats | None = None
+    # Connection settings the job ran with, passwords left out; a finished job
+    # proves they work.
+    connections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 _VIEW = JobView()
+
+
+def _without_password(cfg: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in cfg.items() if key != "password"}
 
 
 def snapshot() -> JobView:
@@ -189,6 +196,10 @@ def start(
         _VIEW.existing = []
         _VIEW.error = None
         _VIEW.stats = None
+        _VIEW.connections = {
+            "mongo": _without_password(mongo_cfg),
+            "sql": _without_password(mssql_cfg),
+        }
         payload = {
             "plan": copy.deepcopy(plan),
             "options": copy.deepcopy(options),

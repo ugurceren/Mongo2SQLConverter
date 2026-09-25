@@ -26,6 +26,7 @@ from core.logutil import JobLog, get_logger
 from core.mongo import MongoClientWrapper
 from core.mssql import (
     AUTH_NEEDS_PASSWORD,
+    AUTH_NEEDS_USERNAME,
     AUTH_SQL,
     AUTH_WINDOWS,
     AUTH_WINDOWS_USER,
@@ -36,6 +37,7 @@ from core.mssql import (
 from core.settings import load_connection_overrides, load_settings
 
 COLLECTIONS_KEY = "collections"
+COLLECTIONS_ERROR_KEY = "collections_error"
 # Password typed for this session only, when the user asked not to store it.
 SQL_SESSION_PASSWORD = "sql_session_password"
 
@@ -235,6 +237,100 @@ def sql_table_watermark(
     return status, watermark
 
 
+@dataclass
+class ConnError:
+    """A connection failure: a short line for people and the driver's own text."""
+
+    summary: str
+    detail: str = ""
+
+
+def mongo_error(exc: Exception) -> ConnError:
+    from pymongo import errors
+
+    detail = str(exc)
+    if isinstance(exc, errors.ConfigurationError):
+        summary = "Bağlantı URI'si geçersiz. `mongodb://sunucu:27017` biçiminde yazın."
+    elif isinstance(exc, errors.OperationFailure) and exc.code == 18:
+        summary = "Kimlik doğrulama başarısız. Kullanıcı adını, şifreyi ve authSource değerini kontrol edin."
+    elif isinstance(exc, errors.OperationFailure) and exc.code == 13:
+        summary = "Bu hesabın veritabanını okuma yetkisi yok."
+    elif isinstance(exc, errors.ConnectionFailure):
+        summary = "Sunucuya ulaşılamadı. Adresi, portu ve ağ erişimini kontrol edin."
+    else:
+        summary = "Mongo bağlantısı kurulamadı."
+    return ConnError(summary, detail)
+
+
+def sql_error(exc: Exception) -> ConnError:
+    # MssqlConnection raises RuntimeError with a message that is already readable.
+    if isinstance(exc, RuntimeError):
+        return ConnError(str(exc))
+    detail = str(exc)
+    state = str(exc.args[0]) if exc.args else ""
+    lowered = detail.lower()
+    if "certificate" in lowered:
+        summary = (
+            "Sunucu sertifikası doğrulanamadı. \"Sunucu sertifikasına doğrulamadan güven\" "
+            "kutusunu işaretleyin ya da Driver 17 seçin."
+        )
+    elif state == "28000":
+        summary = "Giriş başarısız. Kullanıcı adını ve şifreyi kontrol edin."
+    elif state == "IM002":
+        summary = "ODBC sürücüsü bulunamadı. Kurulu bir sürücü seçin."
+    elif state in ("08001", "08S01", "HYT00"):
+        summary = "Sunucuya ulaşılamadı. Sunucu adını, instance'ı ve ağ erişimini kontrol edin."
+    elif state == "42000" and "database" in lowered:
+        summary = "Veritabanı açılamadı. Adını ve bu hesabın erişimini kontrol edin."
+    else:
+        summary = "SQL Server bağlantısı kurulamadı."
+    return ConnError(summary, detail)
+
+
+MONGO_HEALTH_KEY = "m2s_mongo_health"
+SQL_HEALTH_KEY = "m2s_sql_health"
+
+
+def _mongo_signature(cfg: dict[str, Any]) -> str:
+    return "|".join(
+        str(cfg.get(name) or "").strip() for name in ("uri", "database", "username")
+    )
+
+
+def _sql_signature(cfg: dict[str, Any]) -> str:
+    auth = auth_mode(cfg)
+    user = str(cfg.get("username") or "").strip() if auth in AUTH_NEEDS_USERNAME else ""
+    return "|".join(
+        (
+            str(cfg.get("server") or "").strip(),
+            str(cfg.get("database") or "").strip(),
+            auth,
+            user,
+            str(cfg.get("driver") or ""),
+            str(cfg.get("encrypt") or "default"),
+            str(bool(cfg.get("trust_certificate", False))),
+        )
+    )
+
+
+def _signature(kind: str, cfg: dict[str, Any]) -> str:
+    return _mongo_signature(cfg) if kind == "mongo" else _sql_signature(cfg)
+
+
+def record_health(kind: str, cfg: dict[str, Any], ok: bool) -> None:
+    """Remember whether a connection with exactly this config worked, for this session."""
+    key = MONGO_HEALTH_KEY if kind == "mongo" else SQL_HEALTH_KEY
+    st.session_state[key] = {"signature": _signature(kind, cfg), "ok": bool(ok)}
+
+
+def connection_health(kind: str, cfg: dict[str, Any]) -> bool | None:
+    """True/False from this session's last check of this config; None when never checked."""
+    seen = st.session_state.get(MONGO_HEALTH_KEY if kind == "mongo" else SQL_HEALTH_KEY)
+    if not seen or seen["signature"] != _signature(kind, cfg):
+        return None
+    return seen["ok"]
+
+
 def mongo_cfg_from_form(uri: str, database: str, user: str, password: str | None) -> dict[str, Any]:
     return {
         "uri": uri,
@@ -253,15 +349,19 @@ def fetch_collections(mongo_cfg: dict[str, Any]) -> list[str]:
         mongo.close()
 
 
-def collection_list(settings: Settings) -> tuple[list[str], str | None, str | None]:
+def collection_list(settings: Settings) -> tuple[list[str], ConnError | None, str | None]:
     """
     Collection names for the saved connection, cached per session.
 
-    Returns (names, error, warning). Call `invalidate_collections` to force a
-    fresh read on the next run.
+    Returns (names, error, warning). The error is cached with the names, so it
+    stays on screen until `invalidate_collections` forces a fresh read.
     """
     if COLLECTIONS_KEY in st.session_state:
-        return st.session_state[COLLECTIONS_KEY], None, None
+        return (
+            st.session_state[COLLECTIONS_KEY],
+            st.session_state.get(COLLECTIONS_ERROR_KEY),
+            _empty_warning(settings, st.session_state[COLLECTIONS_KEY]),
+        )
 
     if not settings.mongo_ready:
         st.session_state[COLLECTIONS_KEY] = []
@@ -271,21 +371,30 @@ def collection_list(settings: Settings) -> tuple[list[str], str | None, str | No
         with st.spinner("Koleksiyon listesi alınıyor..."):
             names = fetch_collections(settings.mongo)
     except Exception as exc:
+        error = mongo_error(exc)
         st.session_state[COLLECTIONS_KEY] = []
-        return [], f"Mongo bağlantısı başarısız: {exc}", None
+        st.session_state[COLLECTIONS_ERROR_KEY] = error
+        record_health("mongo", settings.mongo, False)
+        return [], error, None
 
     st.session_state[COLLECTIONS_KEY] = names
-    warning = None
-    if not names:
-        warning = (
-            f"`{settings.mongo.get('database')}` içinde koleksiyon yok. "
-            "Veritabanı adı yanlış olabilir."
-        )
-    return names, None, warning
+    st.session_state.pop(COLLECTIONS_ERROR_KEY, None)
+    record_health("mongo", settings.mongo, True)
+    return names, None, _empty_warning(settings, names)
+
+
+def _empty_warning(settings: Settings, names: list[str]) -> str | None:
+    if names or not settings.mongo_ready or st.session_state.get(COLLECTIONS_ERROR_KEY):
+        return None
+    return (
+        f"`{settings.mongo.get('database')}` içinde koleksiyon yok. "
+        "Veritabanı adı yanlış olabilir."
+    )
 
 
 def invalidate_collections() -> None:
     st.session_state.pop(COLLECTIONS_KEY, None)
+    st.session_state.pop(COLLECTIONS_ERROR_KEY, None)
     st.session_state.pop(COUNTS_KEY, None)
     st.session_state.pop(PLAN_CACHE_KEY, None)
     st.session_state.pop("field_indexes", None)
