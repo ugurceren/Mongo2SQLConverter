@@ -10,6 +10,7 @@ from app.ui.services import (
     apply_remembered_collection,
     collection_count_caption,
     collection_list,
+    format_int,
     invalidate_collections,
     nesting_card,
     profile_many,
@@ -31,6 +32,8 @@ RESULT_KEYS = (
     "plan",
     "result_name",
     "result_scope",
+    "result_summary",
+    "result_skipped",
 )
 
 
@@ -179,17 +182,34 @@ def render(settings: Settings) -> None:
                 st.session_state["plan"] = plan
                 st.session_state["ddl"] = render_database_ddl([named])
                 st.session_state["drdl"] = render_database_drdl([named], database)
-            st.success(f"{len(plans)} koleksiyon · {total_docs} belge profillendi")
+            # Kept for later reruns, shown under the next-step bar below.
+            st.session_state["result_summary"] = (
+                f"{len(plans)} koleksiyon · {format_int(total_docs)} belge profillendi"
+            )
+            st.session_state["result_skipped"] = list(skipped)
         else:
             _clear_results()
             st.warning("Profillenecek belge bulunamadı.")
-        if skipped:
-            st.caption("Boş olduğu için atlandı: " + ", ".join(skipped))
+            if skipped:
+                st.caption("Boş olduğu için atlandı: " + ", ".join(skipped))
         for item in errors:
             st.error(item)
 
     if "drdl" not in st.session_state:
         return
+
+    # The next step first, right under the button: no scrolling past the output to find it.
+    st.write("")
+    theme.next_step(
+        "transfer",
+        "Çıkarılan şemayı SQL Server'a yazın: tablolar plana göre oluşur, "
+        "belgeler tam ya da artımlı olarak aktarılır.",
+    )
+    summary = st.session_state.get("result_summary")
+    if summary:
+        st.info(summary, icon=":material/info:")
+    if st.session_state.get("result_skipped"):
+        st.caption("Boş olduğu için atlandı: " + ", ".join(st.session_state["result_skipped"]))
 
     name = st.session_state.get("result_name") or "schema"
     st.write("")
@@ -230,9 +250,3 @@ def render(settings: Settings) -> None:
         else:
             st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")
             st.code(st.session_state["drdl"], language="yaml")
-
-    theme.next_step(
-        "transfer",
-        "Çıkarılan şemayı SQL Server'a yazın: tablolar plana göre oluşur, "
-        "belgeler tam ya da artımlı olarak aktarılır.",
-    )

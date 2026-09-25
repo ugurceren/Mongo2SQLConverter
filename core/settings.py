@@ -116,6 +116,8 @@ def save_sync_watermark(collection: str, last_id: str, last_id_type: str) -> Pat
 
 TIMEZONE_MODES = ("local", "utc")
 SCHEDULE_MODES = ("auto", "full", "incremental")
+DEFAULT_SAMPLE = 5000  # documents profiled for the plan; 0 = the whole collection
+DEFAULT_BATCH = 1000  # documents per write batch
 
 
 def _as_date(value: Any) -> date | None:
@@ -191,8 +193,8 @@ def default_transfer_prefs() -> dict[str, Any]:
         "table": "",
         "schema": "",
         "schedule_mode": "auto",
-        "batch": 2000,
-        "sample": 5000,
+        "batch": DEFAULT_BATCH,
+        "sample": DEFAULT_SAMPLE,
         "allow_null": True,
         "table_names": {},
     }
@@ -235,8 +237,8 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
     prefs["table"] = str(stored.get("table") or "").strip()
     prefs["schema"] = str(stored.get("schema") or "").strip()
     prefs["schedule_mode"] = _as_schedule_mode(stored.get("schedule_mode"))
-    prefs["batch"] = _as_int(stored.get("batch"), 2000, 100)
-    prefs["sample"] = _as_int(stored.get("sample"), 5000, 0)
+    prefs["batch"] = _as_int(stored.get("batch"), DEFAULT_BATCH, 100)
+    prefs["sample"] = _as_int(stored.get("sample"), DEFAULT_SAMPLE, 0)
     if "allow_null" in stored:
         prefs["allow_null"] = bool(stored.get("allow_null"))
     prefs["table_names"] = _as_name_map(stored.get("table_names"))

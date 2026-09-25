@@ -21,6 +21,7 @@ from core.preflight import Report, run_preflight
 from core.rejects import RejectLog
 from core.retry import describe
 from core.settings import (
+    DEFAULT_BATCH,
     _as_schedule_mode,
     load_settings,
     load_sync_watermark,
@@ -64,7 +65,7 @@ class TransferRequest:
     mongo_database: str
     mode: str = "auto"  # requested: full | incremental | auto
     date_query: dict[str, Any] | None = None
-    batch: int = 2000
+    batch: int = DEFAULT_BATCH
     recreate: bool = False
     clear_first: bool = False
     restart: bool = False

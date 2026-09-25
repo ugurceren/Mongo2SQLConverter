@@ -37,6 +37,7 @@ from core.mssql import MssqlConnection
 from core.reader import ChunkedReader, SourceDoc, projection_for
 from core.rejects import RejectLog
 from core.retry import Retrier, RetryPolicy, Stopped
+from core.settings import DEFAULT_BATCH
 from core.textutil import clip_utf16, json_text, utf16_len
 from core.writer import BatchWriter, LiveSql, Unit
 
@@ -839,7 +840,7 @@ def transfer_collection(
     run: RunPlan,
     rejects: RejectLog,
     query: dict[str, Any] | None = None,
-    batch_docs: int = 2000,
+    batch_docs: int = DEFAULT_BATCH,
     batch_rows: int = 20_000,
     batch_bytes: int = 16 * 1024 * 1024,
     expected_count: int | None = None,
@@ -926,22 +927,30 @@ def transfer_collection(
         seq = run.docs_done
         batch: list[Unit] = []
         rows = size = 0
+        flatten = 0.0
         started = time.perf_counter()
+
+        def settle() -> None:
+            # All three move together, once per batch: the writer reads them
+            # from its own thread while this one works on the next batch.
+            timing["flatten"] += flatten
+            timing["bytes"] += size
+            timing["produce"] += time.perf_counter() - started
+
         for item in reader:
             seq += 1
             tick = time.perf_counter()
             unit = _unit(item, seq, flattener)
-            timing["flatten"] += time.perf_counter() - tick
-            timing["bytes"] += unit.size
+            flatten += time.perf_counter() - tick
             batch.append(unit)
             rows += unit.rows
             size += unit.size
             if len(batch) >= batch_docs or rows >= batch_rows or size >= batch_bytes:
-                timing["produce"] += time.perf_counter() - started
+                settle()
                 yield batch
-                batch, rows, size = [], 0, 0
+                batch, rows, size, flatten = [], 0, 0, 0.0
                 started = time.perf_counter()
-        timing["produce"] += time.perf_counter() - started
+        settle()
         if batch:
             yield batch
 

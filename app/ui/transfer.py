@@ -38,6 +38,8 @@ from core.mongo import date_range_filter
 from core.preflight import PROBE_DOCS, format_duration, run_preflight
 from core.rejects import read_lines
 from core.settings import (
+    DEFAULT_BATCH,
+    DEFAULT_SAMPLE,
     ROOT,
     default_transfer_prefs,
     load_sync_watermark,
@@ -63,6 +65,29 @@ EXCLUDE_KEY = "tr_exclude"
 EDITOR_NONCE = "tr_cols_nonce"
 PREFLIGHT_KEY = "tr_preflight"
 PREFLIGHT_REQUEST_KEY = "tr_preflight_request"
+SAMPLE_STEP = 1000
+BATCH_STEP = 500
+
+
+def _saved_sample(prefs: dict) -> int:
+    value = prefs.get("sample")
+    return DEFAULT_SAMPLE if value is None else int(value)  # 0 (whole collection) is a real choice
+
+
+def _saved_batch(prefs: dict) -> int:
+    return int(prefs.get("batch") or DEFAULT_BATCH)
+
+
+def _restore_widget(key: str, value: Any) -> None:
+    """
+    Put a value back into a widget key Streamlit dropped.
+
+    Streamlit deletes a widget's key after a run that did not draw it, so
+    after a visit to another page an input would come back at its minimum
+    (sample 0, batch 100) and be saved like that. Call right before the widget.
+    """
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 def _defaults(settings: Settings) -> dict:
@@ -70,8 +95,8 @@ def _defaults(settings: Settings) -> dict:
         "collection": None,
         "schema": settings.schema,
         "table": "",
-        "sample": 0,
-        "batch": 2000,
+        "sample": DEFAULT_SAMPLE,
+        "batch": DEFAULT_BATCH,
         "recreate": False,
         "clear_first": False,
         "allow_null": True,
@@ -134,8 +159,8 @@ def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
     st.session_state[_table_widget_key(collection)] = prefs.get("table") or sql_table_ident(
         collection
     )
-    st.session_state[f"tr_sample_{collection}"] = int(prefs.get("sample") or 5000)
-    st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 2000)
+    st.session_state[f"tr_sample_{collection}"] = _saved_sample(prefs)
+    st.session_state[f"tr_batch_{collection}"] = _saved_batch(prefs)
     st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
 
 
@@ -146,8 +171,8 @@ def _job_prefs(options: dict) -> dict:
         "nesting": options.get("nesting") or "hybrid",
         "table": options.get("table") or "",
         "schedule_mode": options.get("schedule_mode") or "auto",
-        "batch": int(options.get("batch") or 2000),
-        "sample": int(options["sample"]) if options.get("sample") is not None else 5000,
+        "batch": int(options.get("batch") or DEFAULT_BATCH),
+        "sample": int(options["sample"]) if options.get("sample") is not None else DEFAULT_SAMPLE,
         "allow_null": bool(options.get("allow_null", True)),
         "table_names": dict(options.get("table_names") or {}),
     }
@@ -331,8 +356,14 @@ def _date_card(settings: Settings, collection: str, prefs: dict) -> dict[str, An
         start_key = f"tr_date_start_{collection}"
         end_key = f"tr_date_end_{collection}"
         seed_key = f"tr_date_seed_{collection}"
-        if st.session_state.get(seed_key) != field:
-            if lo_date and hi_date:
+        # Streamlit drops the date inputs' keys on another page (see _restore_widget).
+        missing = start_key not in st.session_state or end_key not in st.session_state
+        if st.session_state.get(seed_key) != field or missing:
+            if missing and saved.get("field") == field and saved.get("start") and saved.get("end"):
+                # Opening the collection, or back from another page: the saved range.
+                st.session_state[start_key] = saved["start"]
+                st.session_state[end_key] = saved["end"]
+            elif lo_date and hi_date:
                 st.session_state[start_key] = lo_date
                 st.session_state[end_key] = hi_date
             elif indexed is True:
@@ -686,6 +717,9 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
 
     st.write("")
     with theme.collapsible_card("tr_sync", "Senkron", "Yazma şekli ve profil ayarları."):
+        # The mode is not saved with the prefs, so this session keeps it for the page.
+        mode_memory = f"tr_sync_last_{collection}"
+        _restore_widget(f"tr_sync_{collection}", st.session_state.get(mode_memory, "Tam senkron"))
         mode = st.radio(
             "Senkron",
             ("Tam senkron", "Artımlı"),
@@ -693,6 +727,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             key=f"tr_sync_{collection}",
             help="Tam: tüm belgeler. Artımlı: SQL tablosundaki son `_id` sonrası yeni kayıtlar.",
         )
+        st.session_state[mode_memory] = mode
         incremental = mode == "Artımlı"
         watermark = None
         watermark_source = None
@@ -760,12 +795,16 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 "istiyorsanız tabloları boşaltın veya yeniden oluşturun."
             )
 
+        # Saved values, back in place after a visit to another page (see _restore_widget).
+        _restore_widget(f"tr_sample_{collection}", _saved_sample(prefs))
+        _restore_widget(f"tr_batch_{collection}", _saved_batch(prefs))
+        _restore_widget(f"tr_null_{collection}", bool(prefs.get("allow_null", True)))
         row2 = st.columns([1.2, 1.2, 2.6], vertical_alignment="bottom")
         with row2[0]:
             sample = st.number_input(
                 "Profil örneği",
                 min_value=0,
-                step=1000,
+                step=SAMPLE_STEP,
                 key=f"tr_sample_{collection}",
                 help=(
                     "Şema için kaç belge taransın. 5000 önerilir. "
@@ -776,10 +815,10 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             batch = st.number_input(
                 "Yazma partisi",
                 min_value=100,
-                step=100,
+                step=BATCH_STEP,
                 key=f"tr_batch_{collection}",
                 help=(
-                    "SQL'e bir seferde kaç belgelik paket yazılsın. "
+                    f"SQL'e bir seferde kaç belgelik paket yazılsın. {DEFAULT_BATCH} önerilir. "
                     "Hızı ve belleği etkiler; aktarılacak belge sayısını değiştirmez."
                 ),
             )
@@ -798,7 +837,6 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             )
             allow_null = st.checkbox(
                 "Anahtar dışındaki kolonlar NULL kabul etsin",
-                value=True,
                 key=f"tr_null_{collection}",
                 help="Örnekle profillenen alanlar başka belgelerde eksik olabilir.",
             )

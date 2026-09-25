@@ -497,7 +497,9 @@ def apply_remembered_collection(widget_key: str, collections: list[str]) -> None
     if source not in collections:
         return
     stamp = f"{widget_key}_from_discovery"
-    if st.session_state.get(stamp) != source:
+    # Streamlit drops a widget's key after a run on another page: without it the
+    # box would open empty on every return, so the last pick goes back in.
+    if st.session_state.get(stamp) != source or widget_key not in st.session_state:
         st.session_state[widget_key] = source
         st.session_state[stamp] = source
 
