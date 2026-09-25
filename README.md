@@ -75,7 +75,13 @@ python -m streamlit run tools/ui_gallery.py --server.port 8512
 python tools/run_transfer.py --collection conversations --mode auto
 ```
 
-`--mode auto` (varsayılan kayıtlı tercih): hedef kök tablo yoksa veya boşsa **tam senkron**, tabloda satır varsa **artımlı** (`mongo_id` son `_id`'den büyük). Tek Windows görevi yeter; iki ayrı görev gerekmez.
+`--mode auto` (varsayılan kayıtlı tercih) şöyle karar verir:
+
+- Yarım kalmış bir tam yükleme varsa ve kırılım ile tarih filtresi aynıysa, kontrol noktasından **devam eder**. Kolon genişlikleri her çalıştırmada yeniden örneklense de devam engellenmez; uzun değerler kolonu genişletir.
+- Hedef kök tablo yoksa veya boşsa **tam senkron** yapar.
+- Aksi hâlde **artımlı** çalışır: kontrol noktasındaki son `_id`'den sonrasını okur. ObjectId anahtarlarda 15 dakika geriden başlar, böylece saati geride kalan istemcilerin yazdığı belgeler kaçmaz.
+
+Tek Windows görevi yeter; iki ayrı görev gerekmez.
 
 İndirilen `.bat` / `.ps1` `--collection` ile birlikte `--table` (kök SQL tablosu) ve varsa `--rename yol=Tablo` taşır. Görev bu tablolara kilitlenir; uygulamada başka koleksiyon seçmek veya o koleksiyonun adını sonradan değiştirmek eski dosyayı etkilemez. Eski stil (yalnız `--collection`) hâlâ `config.local.yaml` kaydını okur.
 
@@ -83,7 +89,24 @@ python tools/run_transfer.py --collection conversations --mode auto
 python tools/run_transfer.py --collection conversations --mode auto --schema dbo --table Conversations --rename "messages[]=ConvMessages"
 ```
 
-`--mode full` tabloyu yeniden doldurur. `--mode incremental` her zaman artımlıdır (işaret yoksa yine tüm belgeleri okur).
+`--mode full` tabloyu yeniden doldurur; yarım kalmış bir tam yükleme varsa önce onu bitirir. `--mode incremental` her zaman artımlıdır (işaret yoksa yine tüm belgeleri okur).
+
+Diğer bayraklar:
+
+| Bayrak | Ne yapar |
+|--------|----------|
+| `--restart` | Kontrol noktasını yok sayar ve yeni bir tam yükleme başlatır. Tablolar boş değilse her parti yazmadan önce siler. |
+| `--max-rejects N` | N'den fazla belge reddedilirse işi durdurur. Varsayılan `loader.max_rejects` (1000). |
+| `--full-profile` | `--sample 0` ile gerçekten her belgeyi profiller. Bu bayrak yoksa 1 milyonun üstündeki koleksiyonlarda profil 100.000 belgeyle sınırlanır. |
+| `--preflight-only` | Hiçbir şey yazmaz; ön kontrol raporunu basar (aşağıda). |
+
+Çıkış kodları:
+
+| Kod | Anlamı |
+|-----|--------|
+| 0 | Temiz bitti. |
+| 2 | Bitti, ama bazı belgeler reddedildi ya da değerler kırpıldı veya NULL'a çevrildi. Ayrıntı red dosyasında. |
+| 1 | Hata. İş bir sonraki çalıştırmada kontrol noktasından devam eder. |
 
 Bağlantı ve job ayarları `config.local.yaml` içindedir (koleksiyon başına `nesting`, `table`, `schema`, `schedule_mode`, `batch`, `sample`, kolon ve tarih tercihleri). SQL şifresi gerekiyorsa dosyada olmalı; Streamlit oturum şifresi CLI'da yoktur.
 
@@ -92,7 +115,12 @@ Bağlantı ve job ayarları `config.local.yaml` içindedir (koleksiyon başına 
 1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin. Dosya adı `mongo2sql_<koleksiyon>.bat`; içinde `--table` o koleksiyonun kök tablosudur.
 2. Görev Zamanlayıcı → Görev Oluştur. Eylem: indirilen `.bat`, ya da Program `python.exe` (venv) ve karttaki tam argüman satırı. Başlangıç dizini proje klasörü.
 3. **Windows — bu oturum** kimliği için görevi o Windows kullanıcısıyla ve "kullanıcı oturum açmış olsun" ile çalıştırın (Trusted Connection oturuma bağlıdır).
-4. Çıkış kodu 0 başarı, 1 hata. Ayrıntı `logs/mongo2sql.log`.
+4. Çıkış kodu 0 temiz, 2 red ya da kırpmayla tamamlandı, 1 hata. Ayrıntı `logs/mongo2sql.log`.
+5. Uzun işler (yüz milyonlarca belge günler sürebilir) için:
+   - **Ayarlar** sekmesinde "Görevi şu süreden uzun çalışırsa durdur" varsayılanı **3 gündür**; kapatın ya da süreyi uzatın.
+   - "Kullanıcı oturum açmış olsun ya da olmasın çalıştır"ı seçin ve parolayı saklayın ("Parolayı saklama" kutusunu işaretlemeyin). Oturum kapansa da iş sürer, Windows kimliği de ağda çalışır.
+   - **Koşullar** sekmesinde "Yalnızca bilgisayar AC gücündeyse başlat" ile "Pile geçerse durdur" kutularını kaldırın. Windows'un güç ayarında uykuyu kapatın.
+   - İş durursa ya da bilgisayar yeniden başlarsa aynı görevi tekrar çalıştırmak yeter; kaldığı yerden devam eder.
 
 Periyodik görevde tarih aralığını kapatın. Artımlı + sabit tarih birlikte kullanıldığında aralık dışı `_id`'ler sonraki koşularda kaçabilir; dönem yüklemesi için tam senkron daha güvenlidir. `auto` artımlı aşamada kayıtlı tarih filtresini uygulamaz.
 
@@ -132,11 +160,79 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 
 **Dikkat:** Artimli senkron ile tarih araligini birlikte kullanirken belgeler `_id` sirasiyla okunur ve isaret yalnizca filtreden gecen son belgeye ilerler; aralik disinda kalan daha buyuk `_id`'ler sonraki kosularda bir daha okunmaz. Donem bazli yukleme icin tam senkron daha guvenlidir.
 
+## Büyük koleksiyonlar
+
+Yüz milyonlarca belgelik bir yükleme günler sürebilir. Aktarım bu süre boyunca kopmalara, bozuk belgelere ve yeniden başlatmalara dayanacak şekilde çalışır.
+
+**Kontrol noktası.** Aktarım, hedef şemada `[şema].[Mongo2SqlCheckpoint]` tablosunu kendisi oluşturur; kök tablo başına bir satır tutar. Bu satır her partide, verilerle aynı transaction'da güncellenir. Böylece iş nerede durursa dursun, satır SQL'e hangi belgelerin yazıldığını tam olarak gösterir. Yeniden çalıştırılınca iş, belge atlamadan ve çift yazmadan kaldığı yerden devam eder.
+- Son `_id` her tipte kayıpsız saklanır: ObjectId, sayı ya da metin.
+- Yazma yetkisi olup tablo oluşturma yetkisi olmayan hesaplarda tabloyu DBA oluşturabilir. Gereken `CREATE TABLE` komutu, ilk çalıştırmada günlüğe yazılır.
+- Aynı tablolara aynı anda tek bir iş yazar (`sp_getapplock`). Arayüz ile Görev Zamanlayıcı çakışırsa ikinci iş hemen "başka bir aktarım yazıyor" hatasıyla durur.
+
+**Yeniden deneme.**
+- Beklenip yeniden denenen hatalar:
+  - Mongo tarafında bağlantı kopması, primary değişimi ve imleç kaybı.
+  - SQL tarafında bağlantı kopması, deadlock ve kilit zaman aşımı.
+- Deneme sınırı olay başına en çok 12 deneme ya da 30 dakikadır.
+- Transaction log ya da disk dolarsa (9002) iş 2 saate kadar 5 dakikada bir yeniden dener ve günlüğe DBA için not düşer.
+- Commit sunucuya ulaşmış ama onayı kaybolmuşsa bunu kontrol noktasından anlar ve o partiyi tekrar yazmaz.
+
+**Bozuk veri.** SQL Server'ın kabul etmediği bir belge çıkarsa (aralık dışı sayı, kısıtlama ihlali vb.) iş durmaz. Parti ikiye bölünerek o belge bulunur ve yalnız o atlanır.
+- NaN, taşan sayılar ve SQL Server'ın desteklediği aralığın dışındaki tarihler NULL yazılır ve kaydedilir.
+- Çözülemeyen BSON içeren belgeler reddedilir.
+- Hepsi `logs/rejects/<koleksiyon>__<tablo>__<zaman>.jsonl` dosyasına satır satır yazılır: `_id`, tablo, kolon, SQLSTATE ve neden. Belgenin içeriği bu dosyaya yazılmaz.
+- Reddedilen belge sayısı `loader.max_rejects` değerini aşarsa ya da tek partide 50'den fazla red çıkarsa hata sistematik sayılır ve iş durur.
+
+**Uzun metin.** Profilde görülenden uzun bir değer gelirse kolon kırpılmadan genişletilir (`ALTER COLUMN`). Nullability ve collation korunur. Anahtar, index ya da FK kolonlarında ya da ALTER yetkisi yoksa genişletme yapılamaz; değer kırpılır ve red dosyasına `clip` olarak yazılır.
+
+**Boşaltma.** "Yazmadan önce tabloları boşalt" tek transaction'da `TRUNCATE` kullanır: alt tabloların FK'ları düşürülür, tablolar boşaltılır, FK'lar aynı adlarla geri eklenir. Yetki yoksa 50.000'lik `DELETE` parçalarına düşer.
+
+**Ön kontrol.** Büyük bir işten önce SQL aktarımı sayfasındaki **Ön kontrol** düğmesini kullanın, ya da:
+
+```powershell
+python tools/run_transfer.py --collection conversations --preflight-only
+```
+
+Rapor şunları içerir:
+- ODBC sürücüsü: eski "SQL Server" sürücüsü için uyarı verir.
+- SQL sürümü ve collation.
+- Recovery model, log bekleme nedeni, dosya büyüme ayarları ve yetkiler.
+- Mongo sürümü ve tarih alanının index'i.
+- 5.000 belgelik gerçek bir hız ölçümü: okuma, düzleştirme ve geçici (`#temp`) tablolara yazıp geri alma. Hiçbir şey kalıcı olarak yazılmaz.
+
+Aşama hızlarından toplam süre tahmin edilir. İş başladıktan sonra `logs/mongo2sql.log` içindeki ilerleme satırları gerçek hızı ve kalan süreyi gösterir.
+
+**Ayarlar** (`config.yaml` → `loader:`):
+
+| Ayar | Varsayılan | Ne işe yarar |
+|------|------------|--------------|
+| `max_rejects` | 1000 | Bu sayının üstünde red olursa iş durur. |
+| `incremental_overlap_minutes` | 15 | Artımlı çalışma ObjectId'lerde bu kadar geriden başlar. |
+| `commit_rows`, `commit_mb` | 20000, 16 | Yazma partisi (belge sayısı), bu satır sayısı ya da bu boyut, hangisi önce dolarsa commit edilir. |
+| `prefetch` | `true` | SQL yazarken sonraki partiyi ayrı bir iş parçacığında okur ve düzleştirir. |
+
+**Ağ.** Mongo ile arasında yavaş bir hat varsa URI'ye `compressors=zstd,zlib` ekleyin (örn. `mongodb://host/?compressors=zstd,zlib`). `zstd` için `pip install zstandard` gerekir; paket yoksa `zlib` kullanılır.
+
+**SQL Server log'u.** Recovery model FULL ise transaction log yalnız log yedeğiyle boşalır. Uzun bir yüklemede DBA'nın sık log yedeği planlaması gerekir. Araç recovery model'i değiştirmez.
+
+**Hız ölçümü (veritabanı olmadan).** Sentetik belgelerle BSON çözme ve düzleştirme hızını ölçer; derlenmiş düzleştiricinin çıktısını referansla karşılaştırır:
+
+```powershell
+python tools/bench_transfer.py --docs 20000 --nesting all
+```
+
 ## Yapi
 
 - `core/inspect.py` — sema profilleme, DRDL/DDL
 - `core/logutil.py` — `logs/mongo2sql.log` dosya günlüğü
-- `core/transfer.py` — plana gore flatten + MSSQL'e yazma
+- `core/transfer.py` — aktarım akışı: okuma, düzleştirme ve yazma (önceki `flatten_document` referans olarak durur)
+- `core/convert.py` — plandan derlenen, kolon başına dönüştürücülerle düzleştirme
+- `core/reader.py` — `_id` sırasıyla, parça parça ve yeniden başlatılabilir Mongo okuması
+- `core/writer.py` — hepsi-ya-hiçbiri partiler, ikiye bölme, kolon genişletme
+- `core/checkpoint.py` — kontrol noktası tablosu ve çalıştırmanın nereden başlayacağı
+- `core/retry.py` — hata sınıfları ve bekleme süreleri
+- `core/rejects.py` — `logs/rejects/` red dosyaları
+- `core/preflight.py` — ön kontrol raporu ve hız ölçümü
 - `core/mongo.py` — Mongo baglantisi
 - `core/mssql.py` — MSSQL baglantisi
 - `core/run_job.py` — Streamlit'siz profil + aktarım (CLI)
@@ -150,6 +246,23 @@ Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yenid
 - `tools/infer_schema.py` — sema CLI
 - `tools/run_transfer.py` — aktarım CLI (Görev Zamanlayıcı)
 - `tools/ui_gallery.py` — tema galerisi: arayüz bileşenleri statik veriyle, iki temada
+- `tools/bench_transfer.py` — veritabanısız hız ölçümü ve çıktı karşılaştırması
+- `tests/` — sahte Mongo ve SQL Server'la testler (ek bağımlılık yok)
+
+## Testler
+
+```powershell
+python -m unittest discover -s tests -t . -v
+```
+
+Testler gerçek bir veritabanı istemez. Kapsadıkları:
+- Dönüştürücünün önceki sürümle eşdeğerliği.
+- Okuyucunun karışık tipli `_id`'lerde sırası ve kopmalardan sonra yeniden başlaması.
+- Yazıcıda ikiye bölme, deadlock, dolu log ve onayı kaybolan commit.
+- Durdurup devam ettirmede her belgenin tam bir kez yazılması.
+- Gönderilen SQL metinleri.
+
+Gerçek SQL Server ve Mongo davranışı ayrıca bir deneme ortamında doğrulanmalıdır.
 
 ## Ayirma
 

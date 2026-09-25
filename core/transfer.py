@@ -7,12 +7,19 @@ specific collection. Changing the selected collection changes the tables.
 
 Re-running is idempotent: a batch first deletes the root rows it is about to
 write, and child rows follow through the plan's ON DELETE CASCADE keys.
-A first load (empty root table, or `clear_first`) skips that delete.
+A first load (empty tables, or `clear_first`) skips that delete.
+
+`coerce` and `flatten_document` below are the reference conversion; the
+loader uses the compiled `core.convert.Flattener`, tested against them.
 """
 
 from __future__ import annotations
 
 import math
+import queue
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -20,11 +27,17 @@ from typing import Any, Callable, Iterator, Sequence
 
 from bson import Binary, Decimal128, ObjectId
 
+from core.checkpoint import RunPlan
+from core.convert import Flattener
 from core.inspect import ddl_statements, key_column_type, sql_table_ident
 from core.logutil import JobLog, get_logger
 from core.mongo import MongoClientWrapper, encode_mongo_id, encode_resume_id
 from core.mssql import MssqlConnection
+from core.reader import ChunkedReader, SourceDoc, projection_for
+from core.rejects import RejectLog
+from core.retry import Retrier, RetryPolicy, Stopped
 from core.textutil import clip_utf16, json_text, utf16_len
+from core.writer import BatchWriter, LiveSql, Unit
 
 ProgressCallback = Callable[[int, int], None]
 StopCallback = Callable[[], bool]
@@ -118,54 +131,6 @@ def read_root_watermark(
     if value is None:
         return True, None
     return True, watermark_from_sql_value(value)
-
-
-def _narrow_sql_type(sql_type: str, live_width: int | None) -> str:
-    """Clip writes to the table's real NVARCHAR/CHAR width so INSERT cannot 22001."""
-    if live_width is None:
-        return sql_type
-    base = sql_type.split("(", 1)[0]
-    if base.upper() not in {"NVARCHAR", "NCHAR", "VARCHAR", "CHAR"}:
-        return sql_type
-    planned = _width_of(sql_type)
-    width = live_width if planned is None else min(planned, live_width)
-    return f"{base}({width})"
-
-
-def _apply_column_width(column: dict[str, Any], widths: dict[str, int | None]) -> dict[str, Any]:
-    if column["name"] not in widths:
-        return column
-    out = dict(column)
-    out["sql_type"] = _narrow_sql_type(column["sql_type"], widths[column["name"]])
-    return out
-
-
-def bind_plan_to_tables(target: MssqlConnection, plan: dict[str, Any]) -> dict[str, Any]:
-    """
-    Existing tables may be narrower than this run's profile (sample vs full scan).
-    Shrink the plan to the live column widths so coerce() clips before INSERT.
-    """
-    schema = plan["schema"]
-    root_widths = target.column_char_widths(schema, plan["root"]["table"])
-    out = dict(plan)
-    root = dict(plan["root"])
-    if root_widths:
-        root["columns"] = [_apply_column_width(c, root_widths) for c in plan["root"]["columns"]]
-    out["root"] = root
-
-    children = []
-    for child in plan["children"]:
-        renamed = dict(child)
-        live = target.column_char_widths(schema, child["table"])
-        if live:
-            if child["kind"] == "map":
-                renamed["key_column"] = _apply_column_width(child["key_column"], live)
-                renamed["value_column"] = _apply_column_width(child["value_column"], live)
-            else:
-                renamed["columns"] = [_apply_column_width(c, live) for c in child["columns"]]
-        children.append(renamed)
-    out["children"] = children
-    return out
 
 
 def relax_nullability(plan: dict[str, Any]) -> dict[str, Any]:
@@ -473,15 +438,23 @@ def _column_value(element: Any, column_path: str, element_prefix: str) -> Any:
 
 @dataclass
 class TransferStats:
-    documents: int = 0
-    skipped_no_id: int = 0
-    truncated: int = 0
+    documents: int = 0  # read in this run: written + rejected
+    written: int = 0
+    truncated: int = 0  # values clipped to their column (recorded in the rejects file)
     rows: dict[str, int] = field(default_factory=dict)
     last_id: str | None = None
     last_id_type: str | None = None
     mode: str = "full"
     first_load: bool = False
     stopped: bool = False
+    rejected: int = 0
+    nulled: int = 0  # values SQL Server would refuse, written as NULL
+    rejects_path: str | None = None
+    resumed: bool = False
+    retries: int = 0
+    widened: list[str] = field(default_factory=list)
+    slow_tables: list[str] = field(default_factory=list)
+    note: str = ""
 
     def add_rows(self, table: str, count: int) -> None:
         if count:
@@ -490,6 +463,10 @@ class TransferStats:
     @property
     def total_rows(self) -> int:
         return sum(self.rows.values())
+
+    @property
+    def clean(self) -> bool:
+        return not (self.rejected or self.truncated or self.nulled)
 
 
 def _root_row(
@@ -687,154 +664,306 @@ def ensure_tables(
 # --------------------------------------------------------------------------
 
 
+def adopt_live_types(
+    target: MssqlConnection, plan: dict[str, Any], log=None
+) -> tuple[dict[str, Any], str]:
+    """
+    Write with the column types the tables really have.
+
+    Tables created by an earlier profile can differ from this run's plan
+    (narrower text, INT where the profile now says BIGINT). Converting to the
+    live type turns a value that would not fit into a reported NULL or a
+    widening instead of a failed batch. Returns (plan, live key type).
+    """
+    schema = plan["schema"]
+    out = dict(plan)
+    key_type = key_column_type(plan)
+    changed: list[str] = []
+
+    def adopt(table: str, column: dict[str, Any], live: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        info = live.get(column["name"])
+        if not info or info["sql_type"].upper() == str(column["sql_type"]).upper():
+            return column
+        changed.append(f"{table}.{column['name']} {column['sql_type']}→{info['sql_type']}")
+        return {**column, "sql_type": info["sql_type"]}
+
+    root_live = target.column_info(schema, plan["root"]["table"])
+    root = dict(plan["root"])
+    if root_live:
+        if "mongo_id" in root_live:
+            key_type = root_live["mongo_id"]["sql_type"]
+        root["columns"] = [
+            column if column["name"] == "mongo_id" else adopt(root["table"], column, root_live)
+            for column in plan["root"]["columns"]
+        ]
+    out["root"] = root
+
+    children = []
+    for child in plan["children"]:
+        live = target.column_info(schema, child["table"])
+        renamed = dict(child)
+        if live:
+            if child["kind"] == "map":
+                renamed["key_column"] = adopt(child["table"], child["key_column"], live)
+                renamed["value_column"] = adopt(child["table"], child["value_column"], live)
+            else:
+                renamed["columns"] = [
+                    adopt(child["table"], column, live) for column in child["columns"]
+                ]
+        children.append(renamed)
+    out["children"] = children
+    if changed and log is not None:
+        log.warning("aktarım canlı kolon tipleri kullanılıyor: %s", "; ".join(changed))
+    return out, key_type
+
+
+class _Failure:
+    """An exception raised on the reading thread, handed to the writing one."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+
+_DONE = object()
+
+
+def _unit(item: SourceDoc, seq: int, flattener: Flattener) -> Unit:
+    if item.doc is None:
+        return Unit(seq, item.id, size=item.size, reject="decode_error", stage="decode", error=item.error)
+    flat = flattener.flatten(item.doc)
+    if flat.reject is not None:
+        return Unit(seq, item.id, size=item.size, reject=flat.reject, stage="flatten", error=flat.reject)
+    return Unit(
+        seq,
+        item.id,
+        key=flat.key,
+        root=flat.root,
+        children=flat.children,
+        size=item.size,
+        rows=flat.rows,
+        notes=flat.notes,
+        overflow=flat.overflow,
+    )
+
+
+def _clock_text(seconds: float | None) -> str | None:
+    if seconds is None:
+        return None
+    seconds = int(seconds)
+    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
 def transfer_collection(
     mongo: MongoClientWrapper,
-    target: MssqlConnection,
+    ops: LiveSql,
     plan: dict[str, Any],
     collection: str,
-    sample: int = 0,
-    batch_size: int = 500,
-    clear_first: bool = False,
+    *,
+    run: RunPlan,
+    rejects: RejectLog,
     query: dict[str, Any] | None = None,
-    mode: str = "full",
-    progress: ProgressCallback | None = None,
+    batch_docs: int = 2000,
+    batch_rows: int = 20_000,
+    batch_bytes: int = 16 * 1024 * 1024,
     expected_count: int | None = None,
-    log_extra: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
     should_stop: StopCallback | None = None,
+    log_extra: dict[str, Any] | None = None,
+    max_rejects: int = 1000,
+    prefetch: bool = True,
+    reader_options: dict[str, Any] | None = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> TransferStats:
-    """Stream a collection into the plan's tables, batch by batch.
-
-    `sample` is only for a capped write (tests). Production full/incremental
-    passes 0 and uses `query` (`None` = all docs, or `{_id: {$gt: ...}}`).
-    Documents are read in `_id` order so the watermark is the last written id.
     """
-    plan = bind_plan_to_tables(target, plan)
-    plan = _drop_missing_live_columns(target, plan)
+    Stream a collection into the plan's tables, batch by batch.
+
+    `ops` is a connected `LiveSql` that holds the table lock and owns the
+    checkpoint row; `run` says where to start and whether rows may already
+    exist. Documents are read in `_id` order, so the checkpoint always names
+    the last document that is in SQL. With `prefetch` the next batch is read
+    and flattened while the current one is written.
+    """
+    log = get_logger()
+    db = ops.db
+    plan, key_type = adopt_live_types(db, plan, log)
+    plan = _drop_missing_live_columns(db, plan)
+    ops.key_type = key_type
     schema = plan["schema"]
     root_table = plan["root"]["table"]
-    key_type = key_column_type(plan)
-    root_columns = [column["name"] for column in plan["root"]["columns"]]
-    child_specs = [(child["table"], child_columns(child)) for child in plan["children"]]
+    for table, specs in plan_column_specs(plan):
+        ops.prepare_table(table, [name for name, _ in specs], [sql for _, sql in specs])
 
-    if clear_first:
-        # Children first: pre-existing tables may lack the cascade the plan asks for.
-        for child in reversed(plan["children"]):
-            target.clear_table(schema, child["table"])
-        target.clear_table(schema, root_table)
+    stop = threading.Event()
 
-    # Empty destination: DELETE would match nothing and still cost a round-trip
-    # per batch. A re-run into a table that already has rows keeps the delete.
-    exists, max_id = target.max_key(schema, root_table, "mongo_id")
-    first_load = (not exists) or max_id is None
-    stats = TransferStats(mode=mode, first_load=first_load)
-    expected = sample if sample else expected_count
+    def stopping() -> bool:
+        return stop.is_set() or bool(should_stop and should_stop())
+
+    flattener = Flattener(plan, key_type)
+    child_tables = [child["table"] for child in plan["children"]]
+    writer = BatchWriter(
+        ops,
+        plan,
+        flattener.columns,
+        first_load=run.first_load,
+        rejects=rejects,
+        retrier=Retrier("sql", retry_policy, log=log, should_stop=stopping),
+        max_rejects=max_rejects,
+        non_cascading=[] if run.first_load else db.non_cascading_children(schema, root_table, child_tables),
+        log=log,
+    )
+    mongo_retrier = Retrier("mongo", retry_policy, log=log, should_stop=stopping)
+    reader = ChunkedReader(
+        mongo.collection(collection),
+        start_after=run.start_after,
+        query=query,
+        projection=projection_for(plan),
+        retrier=mongo_retrier,
+        should_stop=stopping,
+        **(reader_options or {}),
+    )
+
+    stats = TransferStats(mode=run.mode, first_load=run.first_load, resumed=run.resume, note=run.note)
+    stats.rejects_path = str(rejects.path)
     job = JobLog(
         "aktarım",
         collection=collection,
         tablo=f"{schema}.{root_table}",
-        mod=mode,
-        parti=batch_size,
-        ilk_yükleme=first_load,
+        mod=run.mode,
+        parti=batch_docs,
+        ilk_yükleme=run.first_load,
+        devam=run.resume,
         **(log_extra or {}),
     )
-    job.start(beklenen=expected)
+    job.start(beklenen=expected_count, başlangıç=run.docs_done, karar=run.note)
 
-    keys: list[Any] = []
-    root_rows: list[list[Any]] = []
-    child_rows: dict[str, list[list[Any]]] = {table: [] for table, _ in child_specs}
+    read_seconds = [0.0]
 
-    def flush() -> None:
-        if not root_rows:
-            return
+    def batches() -> Iterator[list[Unit]]:
+        seq = run.docs_done
+        batch: list[Unit] = []
+        rows = size = 0
+        started = time.perf_counter()
+        for item in reader:
+            seq += 1
+            unit = _unit(item, seq, flattener)
+            batch.append(unit)
+            rows += unit.rows
+            size += unit.size
+            if len(batch) >= batch_docs or rows >= batch_rows or size >= batch_bytes:
+                read_seconds[0] += time.perf_counter() - started
+                yield batch
+                batch, rows, size = [], 0, 0
+                started = time.perf_counter()
+        read_seconds[0] += time.perf_counter() - started
+        if batch:
+            yield batch
+
+    def put(q: queue.Queue, item: Any) -> bool:
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.5)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def produce(q: queue.Queue) -> None:
         try:
-            if not first_load:
-                target.delete_keys(schema, root_table, "mongo_id", keys)
-            stats.add_rows(root_table, target.insert_rows(schema, root_table, root_columns, root_rows))
-            for table, columns in child_specs:
-                rows = child_rows[table]
-                if rows:
-                    stats.add_rows(table, target.insert_rows(schema, table, columns, rows))
-            target.commit()
-        except Exception as exc:
-            target.rollback()
-            job.log.exception(
-                "aktarım kesildi %s belgeler=%s süre_sn=%.1f error=%s",
-                job._kv(),
-                stats.documents,
-                job.elapsed(),
-                exc,
-            )
-            message = str(exc)
-            if "22001" in message or "truncated" in message.lower():
-                raise RuntimeError(
-                    "SQL Server bir değeri kolon genişliğine sığdıramadı (22001). "
-                    "Tam senkron ile 'Tabloları yeniden oluştur' ve örnek 0 kullanın."
-                ) from exc
-            raise
-        keys.clear()
-        root_rows.clear()
-        for rows in child_rows.values():
-            rows.clear()
+            for batch in batches():
+                if not put(q, batch):
+                    return
+            put(q, _DONE)
+        except BaseException as exc:  # handed to the writing thread
+            put(q, _Failure(exc))
 
-    def stop_now() -> bool:
-        return bool(should_stop and should_stop())
+    samples: deque[tuple[float, int]] = deque()
+    done = 0
 
-    def halt() -> TransferStats:
-        stats.stopped = True
-        job.stopped(
-            belgeler=stats.documents,
-            satır=stats.total_rows,
-            atlanan=stats.skipped_no_id,
-            kırpılan=stats.truncated,
-            last_id=stats.last_id,
+    def report(batch_len: int) -> None:
+        nonlocal done
+        done += batch_len
+        now = time.monotonic()
+        samples.append((now, done))
+        while len(samples) > 2 and now - samples[0][0] > 300:
+            samples.popleft()
+        rate = 0.0
+        if len(samples) > 1 and samples[-1][0] > samples[0][0]:
+            rate = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0])
+        remaining = (expected_count - done) if expected_count else None
+        eta = _clock_text(remaining / rate) if remaining and remaining > 0 and rate > 0 else None
+        if progress:
+            progress(done, expected_count or 0)
+        job.progress(
+            done,
+            expected_count or 0,
+            satır=sum(writer.stats.rows.values()),
+            reddedilen=rejects.rejected,
+            okuma_sn=f"{read_seconds[0]:.0f}",
+            sql_sn=f"{writer.stats.sql_seconds:.0f}",
+            kalan=eta,
         )
-        return stats
 
-    for doc in mongo.iter_documents(
-        collection,
-        sample=sample,
-        batch_size=batch_size,
-        query=query,
-        sort_by_id=not sample,
-    ):
-        if stop_now():
-            flush()
-            return halt()
-        stats.documents += 1
-        encoded = encode_mongo_id(doc.get("_id"))
-        if encoded:
-            stats.last_id, stats.last_id_type = encoded
-        key, row, children, truncated = flatten_document(doc, plan, key_type)
-        stats.truncated += truncated
-        if key is None:
-            stats.skipped_no_id += 1
+    worker: threading.Thread | None = None
+    q: queue.Queue = queue.Queue(maxsize=2)
+    try:
+        if prefetch:
+            worker = threading.Thread(target=produce, args=(q,), name="mongo2sql-reader", daemon=True)
+            worker.start()
+            source: Iterator[Any] = iter(q.get, _DONE)
         else:
-            keys.append(key)
-            root_rows.append(row)
-            for table, rows in children.items():
-                child_rows[table].extend(rows)
+            source = batches()
+        for item in source:
+            if isinstance(item, _Failure):
+                raise item.exc
+            writer.write(item)
+            report(len(item))
+            if stopping():
+                stats.stopped = True
+                break
+    except Stopped:
+        stats.stopped = True
+    finally:
+        stop.set()
+        if worker is not None:
+            while True:  # unblock a producer waiting on a full queue
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+            worker.join(timeout=30)
+        _fill_stats(stats, writer, rejects, done, mongo_retrier)
 
-        if len(root_rows) >= batch_size:
-            flush()
-            if progress:
-                progress(stats.documents, expected or 0)
-            job.progress(
-                stats.documents,
-                expected or 0,
-                satır=stats.total_rows,
-                last_id=stats.last_id,
-            )
-            if stop_now():
-                return halt()
-
-    flush()
-    if progress:
-        progress(stats.documents, expected or stats.documents)
-    job.done(
+    if not stats.stopped and should_stop and should_stop():
+        stats.stopped = True
+    finish = job.stopped if stats.stopped else job.done
+    finish(
         belgeler=stats.documents,
+        yazılan=stats.written,
         satır=stats.total_rows,
-        atlanan=stats.skipped_no_id,
+        reddedilen=stats.rejected,
         kırpılan=stats.truncated,
+        nulllanan=stats.nulled,
+        genişletilen=len(stats.widened),
+        yeniden_deneme=stats.retries,
         last_id=stats.last_id,
     )
     return stats
+
+
+def _fill_stats(
+    stats: TransferStats, writer: BatchWriter, rejects: RejectLog, done: int, mongo_retrier: Retrier
+) -> None:
+    written = writer.stats
+    stats.documents = done
+    stats.written = written.documents
+    stats.rows = dict(written.rows)
+    stats.rejected = rejects.rejected
+    stats.truncated = rejects.clipped
+    stats.nulled = rejects.nulled
+    stats.widened = list(written.widened)
+    stats.slow_tables = sorted(written.slow_tables)
+    stats.retries = writer.retrier.total_retries + mongo_retrier.total_retries
+    if written.last_id is not None:
+        encoded = encode_mongo_id(written.last_id)
+        if encoded:
+            stats.last_id, stats.last_id_type = encoded

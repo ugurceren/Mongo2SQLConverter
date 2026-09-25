@@ -8,7 +8,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 from bson import ObjectId
+from bson.codec_options import DatetimeConversion
 from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo.errors import ExecutionTimeout
 from pymongo.collection import Collection
 from pymongo.database import Database
 
@@ -37,15 +39,30 @@ class MongoClientWrapper:
         database: str,
         username: str | None = None,
         password: str | None = None,
+        *,
+        long_running: bool = False,
     ):
         self.uri = uri
         self.database_name = database
         self.username = username
         self.password = password
+        # A transfer waits longer for a server and sets socket timeouts, so a
+        # half-open connection becomes an error it can retry, not a hang.
+        self.long_running = long_running
         self._client: MongoClient | None = None
 
     def connect(self) -> Database:
-        kwargs: dict[str, Any] = {"serverSelectionTimeoutMS": 15000}
+        kwargs: dict[str, Any] = {
+            "serverSelectionTimeoutMS": 30000 if self.long_running else 15000,
+            "appname": "mongo2sql",
+            # A date outside Python's range or broken UTF-8 in one document
+            # must not fail the whole batch it arrives in.
+            "datetime_conversion": DatetimeConversion.DATETIME_AUTO,
+            "unicode_decode_error_handler": "replace",
+        }
+        if self.long_running:
+            kwargs["connectTimeoutMS"] = 20000
+            kwargs["socketTimeoutMS"] = 360000  # just above the reader's maxTimeMS
         if self.username:
             kwargs["username"] = self.username
             kwargs["password"] = self.password
@@ -89,9 +106,24 @@ class MongoClientWrapper:
     def collection(self, name: str) -> Collection:
         return self.db[name]
 
-    def estimated_count(self, collection: str, query: dict[str, Any] | None = None) -> int:
+    def estimated_count(
+        self,
+        collection: str,
+        query: dict[str, Any] | None = None,
+        max_time_ms: int | None = None,
+    ) -> int | None:
+        """
+        Document count. Without a query it comes from metadata (instant). With
+        `max_time_ms` a filtered count that would scan too long gives None
+        instead of holding up the job.
+        """
         col = self.collection(collection)
         if query:
+            if max_time_ms:
+                try:
+                    return int(col.count_documents(query, maxTimeMS=max_time_ms))
+                except ExecutionTimeout:
+                    return None
             return int(col.count_documents(query))
         try:
             return int(col.estimated_document_count())

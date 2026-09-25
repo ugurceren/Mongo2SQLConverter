@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import re
 import sys
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from bson import Binary, Decimal128, Int64, ObjectId, json_util
+from bson.datetime_ms import DatetimeMS
 
 from core.mongo import MongoClientWrapper
 from core.settings import load_settings
@@ -67,7 +69,8 @@ def type_name(value: Any) -> str:
         return "decimal"
     if isinstance(value, str):
         return "string"
-    if isinstance(value, datetime):
+    if isinstance(value, (datetime, DatetimeMS)):
+        # DatetimeMS: a BSON date outside Python's range, kept undecoded.
         return "date"
     if isinstance(value, ObjectId):
         return "objectId"
@@ -911,8 +914,12 @@ def key_column_type(plan: dict[str, Any]) -> str:
     root = plan["root"]
     key_column = next((c for c in root["columns"] if c["name"] == "mongo_id"), None)
     key_type = key_column["sql_type"] if key_column else "NVARCHAR(450)"
-    if key_type == "NVARCHAR(MAX)":
-        key_type = f"NVARCHAR({INDEX_KEY_LIMIT})"
+    if key_type.upper().startswith("NVARCHAR("):
+        # A primary key holds at most 900 bytes: NVARCHAR(450). Longer ids are
+        # rejected per document by the loader instead of failing the table.
+        inside = key_type[len("NVARCHAR(") :].rstrip(")").strip()
+        if inside.upper() == "MAX" or (inside.isdigit() and int(inside) > INDEX_KEY_LIMIT):
+            key_type = f"NVARCHAR({INDEX_KEY_LIMIT})"
     return key_type
 
 
@@ -1084,6 +1091,40 @@ def iter_from_mongo(
     yield from source.iter_documents(collection, sample=sample, query=query)
 
 
+FULL_SCAN_LIMIT = 1_000_000  # above this, sample 0 (full scan) is replaced
+GUARDED_SAMPLE = 100_000
+LARGE_COLLECTION = 5_000_000  # transfers of bigger collections profile at least `min_large_sample`
+
+
+def effective_sample(
+    requested: int,
+    estimated: int | None,
+    *,
+    full_profile: bool = False,
+    min_large_sample: int = 0,
+) -> tuple[int, str | None]:
+    """
+    The sample size to profile with, and why it differs from the request.
+
+    A full scan (0) walks every document in Python: hours on hundreds of
+    millions, repeated on every scheduled run. Big transfers instead get a
+    larger random sample, so rare long values still shape the column widths.
+    """
+    if requested <= 0:
+        if full_profile or estimated is None or estimated <= FULL_SCAN_LIMIT:
+            return 0, None
+        return GUARDED_SAMPLE, (
+            f"örnek 0 (tam tarama) ~{estimated} belgede saatler sürer; {GUARDED_SAMPLE} belgeyle "
+            "profilleniyor (tam tarama için --full-profile)"
+        )
+    if min_large_sample and estimated and estimated > LARGE_COLLECTION and requested < min_large_sample:
+        return min_large_sample, (
+            f"büyük koleksiyon (~{estimated} belge): kolon genişlikleri için örnek "
+            f"{requested} → {min_large_sample}"
+        )
+    return requested, None
+
+
 def profile_collection(
     source: MongoClientWrapper,
     collection: str,
@@ -1094,16 +1135,32 @@ def profile_collection(
     headroom: float,
     nesting: str = NESTING_DEEP,
     query: dict[str, Any] | None = None,
+    *,
+    full_profile: bool = False,
+    min_large_sample: int = 0,
 ) -> tuple[Profile, dict[str, Any]]:
     """Profile a collection; `query` narrows profiling to the documents that
     will actually be written, so column widths match the transferred subset."""
+    estimated = None
+    if sample <= 0 or min_large_sample:
+        try:
+            estimated = source.estimated_count(collection)
+        except Exception:
+            estimated = None
+    sample, warning = effective_sample(
+        sample, estimated, full_profile=full_profile, min_large_sample=min_large_sample
+    )
+    if warning:
+        logging.getLogger("mongo2sql").warning("profil %s: %s", collection, warning)
     profile = Profile()
     for doc in iter_from_mongo(source, collection, sample, query):
         profile.add_document(doc)
     maps = detect_map_prefixes(profile, map_min_keys, map_max_fill)
-    return profile, build_plan(
-        profile, collection, schema, maps, headroom, nesting=nesting
-    )
+    plan = build_plan(profile, collection, schema, maps, headroom, nesting=nesting)
+    plan["profile_sample"] = sample
+    if warning:
+        plan["profile_warning"] = warning
+    return profile, plan
 
 
 # --------------------------------------------------------------------------

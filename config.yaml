@@ -9,5 +9,13 @@ profiler:
   map_min_keys: 30
   map_max_fill: 0.2
 
+# Transfers (UI and tools/run_transfer.py). A missing key keeps its default.
+loader:
+  max_rejects: 1000                # stop once more documents than this are rejected
+  incremental_overlap_minutes: 15  # incremental runs re-read ObjectIds this far back
+  commit_rows: 20000               # commit after this many SQL rows...
+  commit_mb: 16                    # ...or this many MiB, whichever comes first
+  prefetch: true                   # read and flatten on a second thread while SQL writes
+
 ui:
   port: 8502

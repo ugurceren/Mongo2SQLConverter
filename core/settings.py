@@ -191,7 +191,7 @@ def default_transfer_prefs() -> dict[str, Any]:
         "table": "",
         "schema": "",
         "schedule_mode": "auto",
-        "batch": 500,
+        "batch": 2000,
         "sample": 5000,
         "allow_null": True,
         "table_names": {},
@@ -235,7 +235,7 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
     prefs["table"] = str(stored.get("table") or "").strip()
     prefs["schema"] = str(stored.get("schema") or "").strip()
     prefs["schedule_mode"] = _as_schedule_mode(stored.get("schedule_mode"))
-    prefs["batch"] = _as_int(stored.get("batch"), 500, 100)
+    prefs["batch"] = _as_int(stored.get("batch"), 2000, 100)
     prefs["sample"] = _as_int(stored.get("sample"), 5000, 0)
     if "allow_null" in stored:
         prefs["allow_null"] = bool(stored.get("allow_null"))

@@ -9,14 +9,9 @@ from typing import Any
 
 from app.ui.services import mongo_client, sql_target
 from core.logutil import get_logger
-from core.mongo import combine_filters, decode_mongo_id, id_after_filter
-from core.settings import save_sync_watermark
-from core.transfer import (
-    TransferStats,
-    ensure_tables,
-    read_root_watermark,
-    transfer_collection,
-)
+from core.run_job import TransferRequest, execute_transfer, loader_settings
+from core.transfer import TransferStats
+from core.writer import LockBusy
 
 _LOCK = threading.Lock()
 _STOP = threading.Event()
@@ -38,6 +33,7 @@ class JobView:
     existing: list[str] = field(default_factory=list)
     error: str | None = None
     stats: TransferStats | None = None
+    note: str = ""  # how the run started (new load, resumed, incremental)
     # Connection settings the job ran with, passwords left out; a finished job
     # proves they work.
     connections: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -73,86 +69,62 @@ def _patch(**fields: Any) -> None:
             setattr(_VIEW, key, value)
 
 
-def _write_query(options: dict[str, Any], date_query: dict[str, Any] | None) -> dict | None:
-    if options.get("mode") != "incremental":
-        return date_query
-    mark = options.get("watermark")
-    if not mark:
-        return date_query
-    try:
-        last_id = decode_mongo_id(mark["last_id"], mark["last_id_type"])
-    except Exception:
-        return date_query
-    return combine_filters(date_query, id_after_filter(last_id))
-
-
 def _run(payload: dict[str, Any]) -> None:
     options: dict[str, Any] = payload["options"]
-    plan: dict[str, Any] = payload["plan"]
-    date_query = payload["date_query"]
     collection = options["collection"]
-    source = mongo_client(payload["mongo"])
-    target = sql_target(payload["mssql"], payload["mssql_password"], options["schema"])
+    source = mongo_client(payload["mongo"], long_running=True)
+    knobs = loader_settings()
+    request = TransferRequest(
+        collection=collection,
+        plan=payload["plan"],
+        mongo_database=payload["mongo"].get("database") or "",
+        mode=options["mode"],
+        date_query=payload["date_query"],
+        batch=int(options["batch"]),
+        recreate=bool(options.get("recreate")),
+        clear_first=bool(options.get("clear_first")),
+        restart=bool(options.get("restart")),
+        max_rejects=knobs["max_rejects"],
+        overlap_minutes=knobs["overlap_minutes"],
+        commit_rows=knobs["commit_rows"],
+        commit_mb=knobs["commit_mb"],
+        prefetch=knobs["prefetch"],
+    )
+
+    def target():
+        return sql_target(payload["mssql"], payload["mssql_password"], options["schema"])
+
+    def progress(done: int, total: int) -> None:
+        _patch(done=done, total=total, message="Belgeler yazılıyor...")
+
     try:
         if _STOP.is_set():
             _patch(status="cancelled", message="Aktarım durduruldu", stats=TransferStats(stopped=True))
             return
-        _patch(message="SQL tabloları hazırlanıyor...")
+        _patch(message="Mongo bağlantısı açılıyor...")
         source.connect()
-        target.connect()
-        created, existing = ensure_tables(target, plan, recreate=options["recreate"])
-        _patch(created=list(created), existing=list(existing))
-        if created:
-            get_logger().info(
-                "aktarım tablolar oluşturuldu collection=%s tablolar=%s",
-                collection,
-                ", ".join(created),
-            )
-        if _STOP.is_set():
-            _patch(status="cancelled", message="Aktarım durduruldu", stats=TransferStats(stopped=True))
-            return
-
-        if options["mode"] == "incremental":
-            exists, sql_mark = read_root_watermark(
-                target, options["schema"], plan["root"]["table"]
-            )
-            if exists:
-                options["watermark"] = sql_mark
-
-        query = _write_query(options, date_query)
-        expected = source.estimated_count(collection, query)
-        _patch(total=expected or 0, message="Belgeler yazılıyor...")
-
-        stats = transfer_collection(
+        result = execute_transfer(
             source,
             target,
-            plan,
-            collection,
-            sample=0,
-            batch_size=options["batch"],
-            clear_first=options["clear_first"],
-            query=query,
-            mode=options["mode"],
-            progress=lambda done, total: _patch(
-                done=done,
-                total=total or expected or 0,
-                message="Belgeler yazılıyor...",
-            ),
-            expected_count=expected,
-            log_extra=payload.get("log_extra"),
+            request,
+            progress=progress,
             should_stop=_STOP.is_set,
+            on_status=lambda message: _patch(message=message),
+            log_extra=payload.get("log_extra"),
         )
-        if stats.last_id and stats.last_id_type:
-            save_sync_watermark(collection, stats.last_id, stats.last_id_type)
-        if stats.stopped:
-            _patch(status="cancelled", stats=stats, done=stats.documents, message="Aktarım durduruldu")
-        else:
-            _patch(
-                status="done",
-                stats=stats,
-                done=stats.documents,
-                message="Aktarım tamamlandı",
-            )
+        stats = result.stats
+        _patch(
+            status="cancelled" if stats.stopped else "done",
+            stats=stats,
+            done=stats.documents,
+            created=list(result.created),
+            existing=list(result.existing),
+            mode=result.mode,
+            note=result.note,
+            message="Aktarım durduruldu" if stats.stopped else "Aktarım tamamlandı",
+        )
+    except LockBusy as exc:
+        _patch(status="error", error=str(exc), message=str(exc))
     except Exception as exc:
         get_logger().exception(
             "aktarım başarısız collection=%s error=%s",
@@ -162,7 +134,6 @@ def _run(payload: dict[str, Any]) -> None:
         _patch(status="error", error=str(exc), message=str(exc))
     finally:
         source.close()
-        target.close()
 
 
 def start(
@@ -196,6 +167,7 @@ def start(
         _VIEW.existing = []
         _VIEW.error = None
         _VIEW.stats = None
+        _VIEW.note = ""
         _VIEW.connections = {
             "mongo": _without_password(mongo_cfg),
             "sql": _without_password(mssql_cfg),

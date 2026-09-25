@@ -52,7 +52,9 @@ def safe_console(text: str) -> str:
 
 def utf16_len(text: str) -> int:
     """NVARCHAR(n) counts UTF-16 code units; astral chars occupy two."""
-    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
+    # Encoding runs in C, far faster than walking characters in Python;
+    # "surrogatepass" counts a lone surrogate as one unit instead of raising.
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def json_text(value: Any) -> str:

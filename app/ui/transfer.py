@@ -14,6 +14,7 @@ from app.ui.services import (
     Settings,
     apply_remembered_collection,
     cached_plan,
+    collection_count,
     collection_count_caption,
     collection_list,
     count_matching,
@@ -21,17 +22,22 @@ from app.ui.services import (
     date_field_options,
     format_int,
     invalidate_sql_watermarks,
+    mongo_client,
     nesting_card,
     record_health,
     remember_collection,
+    sql_checkpoint,
     sql_table_watermark,
+    sql_target,
     stored_plan,
     table_names_editor,
     nesting_widget_key,
 )
-from core.inspect import nesting_labels, render_database_ddl, sql_table_ident
+from core.inspect import LARGE_COLLECTION, nesting_labels, render_database_ddl, sql_table_ident
 from core.logutil import log_path_display
 from core.mongo import date_range_filter
+from core.preflight import PROBE_DOCS, format_duration, run_preflight
+from core.rejects import read_lines
 from core.settings import (
     ROOT,
     default_transfer_prefs,
@@ -55,6 +61,8 @@ PREFS_STAMP = "tr_prefs_collection"
 SAVED_PREFS_KEY = "tr_prefs_saved"
 EXCLUDE_KEY = "tr_exclude"
 EDITOR_NONCE = "tr_cols_nonce"
+PREFLIGHT_KEY = "tr_preflight"
+PREFLIGHT_REQUEST_KEY = "tr_preflight_request"
 
 
 def _defaults(settings: Settings) -> dict:
@@ -63,7 +71,7 @@ def _defaults(settings: Settings) -> dict:
         "schema": settings.schema,
         "table": "",
         "sample": 0,
-        "batch": 500,
+        "batch": 2000,
         "recreate": False,
         "clear_first": False,
         "allow_null": True,
@@ -127,7 +135,7 @@ def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
         collection
     )
     st.session_state[f"tr_sample_{collection}"] = int(prefs.get("sample") or 5000)
-    st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 500)
+    st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 2000)
     st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
     if prefs.get("nesting"):
         st.session_state[nesting_widget_key(collection)] = prefs["nesting"]
@@ -140,7 +148,7 @@ def _job_prefs(options: dict) -> dict:
         "nesting": options.get("nesting") or "hybrid",
         "table": options.get("table") or "",
         "schedule_mode": options.get("schedule_mode") or "auto",
-        "batch": int(options.get("batch") or 500),
+        "batch": int(options.get("batch") or 2000),
         "sample": int(options["sample"]) if options.get("sample") is not None else 5000,
         "allow_null": bool(options.get("allow_null", True)),
         "table_names": dict(options.get("table_names") or {}),
@@ -689,19 +697,48 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         incremental = mode == "Artımlı"
         watermark = None
         watermark_source = None
-        if incremental:
-            sql_status, sql_mark = sql_table_watermark(
-                settings, options["schema"], options["table"]
+        restart = False
+        point = sql_checkpoint(settings, options["schema"], options["table"])
+        unfinished = bool(
+            point is not None
+            and point.mode == "full"
+            and point.status != "completed"
+            and point.last_id_json
+        )
+        if unfinished:
+            st.info(
+                f"Yarım kalan tam yükleme var: **{format_int(point.docs_done)}** belge işlendi "
+                f"({format_int(point.docs_written)} yazıldı, {format_int(point.rejected)} reddedildi), "
+                f"durum `{point.status}`. Aynı kırılım ve tarih aralığıyla çalıştırınca kaldığı "
+                "yerden devam eder."
             )
-            if sql_status == "sql":
-                watermark = sql_mark
-                watermark_source = "sql" if sql_mark else None
+            restart = st.checkbox(
+                "Baştan başla",
+                key=f"tr_restart_{collection}",
+                help=(
+                    "Kontrol noktasını yok sayar. Tabloları da boşaltın ya da yeniden oluşturun; "
+                    "yoksa her parti yazmadan önce siler ve yükleme yavaşlar."
+                ),
+            )
+        if incremental:
+            if point is not None and point.last_id_json:
+                watermark = {"last_id": _checkpoint_id(point), "updated": str(point.updated_at or "")[:19]}
+                watermark_source = "checkpoint"
             else:
-                watermark = load_sync_watermark(collection)
-                watermark_source = "file" if watermark else None
+                sql_status, sql_mark = sql_table_watermark(
+                    settings, options["schema"], options["table"]
+                )
+                if sql_status == "sql":
+                    watermark = sql_mark
+                    watermark_source = "sql" if sql_mark else None
+                else:
+                    watermark = load_sync_watermark(collection)
+                    watermark_source = "file" if watermark else None
 
             if watermark:
-                where = "SQL tablosu" if watermark_source == "sql" else "kayıtlı işaret"
+                where = {"checkpoint": "kontrol noktası", "sql": "SQL tablosu"}.get(
+                    watermark_source or "", "kayıtlı işaret"
+                )
                 st.caption(
                     f"Son işaret · {where} · `_id` > `{watermark['last_id']}`"
                     + (f" · {watermark['updated']}" if watermark.get("updated") else "")
@@ -775,12 +812,22 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "clear_first": False if incremental else clear_first,
             "allow_null": allow_null,
             "mode": "incremental" if incremental else "full",
+            "restart": bool(restart),
             "schedule_mode": prefs.get("schedule_mode") or "auto",
             "watermark": watermark,
             "table_names": dict(prefs.get("table_names") or {}),
         }
     )
     return options
+
+
+def _checkpoint_id(point) -> str:
+    """The checkpoint's `_id` as people read it (ObjectId hex, number, text)."""
+    try:
+        value = point.last_id
+    except Exception:
+        return str(point.last_id_json)
+    return str(value)
 
 
 # --------------------------------------------------------------------------
@@ -808,6 +855,7 @@ def _run_signature(options: dict) -> str:
             options.get("mode"),
             options.get("recreate"),
             options.get("clear_first"),
+            options.get("restart"),
             options.get("allow_null"),
             repr(options.get("date_filter")),
             repr(sorted(columns.get("exclude") or [])),
@@ -825,6 +873,76 @@ def _request_run() -> None:
 
 def _request_stop() -> None:
     transfer_job.request_stop()
+
+
+def _request_preflight() -> None:
+    st.session_state[PREFLIGHT_REQUEST_KEY] = True
+
+
+def _preflight_if_requested(settings: Settings, options: dict, selected: dict | None) -> None:
+    """Run the pre-flight check in this rerun; the report stays until a setting changes."""
+    if not st.session_state.pop(PREFLIGHT_REQUEST_KEY, None) or selected is None:
+        return
+    date_filter = options["date_filter"]
+    signature = _run_signature(options)
+    source = mongo_client(_mongo_cfg(settings), long_running=True)
+    try:
+        with st.spinner(f"Ön kontrol: sürücü, yetki, log ayarları ve {format_int(PROBE_DOCS)} belgelik hız ölçümü..."):
+            source.connect()
+            report = run_preflight(
+                source,
+                lambda: sql_target(dict(settings.mssql), settings.mssql_password, options["schema"]),
+                selected,
+                options["collection"],
+                date_query=_date_query(date_filter),
+                date_field=str(date_filter["field"]) if date_filter.get("enabled") and date_filter.get("field") else None,
+            )
+        st.session_state[PREFLIGHT_KEY] = {"signature": signature, "report": report}
+    except Exception as exc:
+        st.session_state[PREFLIGHT_KEY] = {"signature": signature, "error": str(exc)}
+    finally:
+        source.close()
+
+
+_LEVEL_ICONS = {"ok": ":material/check_circle:", "info": ":material/info:", "warn": ":material/warning:"}
+_RATE_LABELS = (("Okuma", "okuma"), ("Düzleştirme", "düzleştirme"), ("SQL yazma", "SQL yazma"))
+
+
+def _preflight_view(options: dict) -> None:
+    saved = st.session_state.get(PREFLIGHT_KEY)
+    if not saved or saved.get("signature") != _run_signature(options):
+        return
+    if saved.get("error"):
+        theme.error_with_detail("Ön kontrol tamamlanamadı.", saved["error"])
+        return
+    report = saved["report"]
+    warnings = sum(1 for finding in report.findings if finding.level == "warn")
+    title = "Ön kontrol raporu" + (f" · {warnings} uyarı" if warnings else "")
+    with st.expander(title, expanded=True):
+        cols = st.columns(4)
+        for col, (label, key) in zip(cols, _RATE_LABELS):
+            rate = report.rates.get(key)
+            col.metric(label, "—" if rate is None else f"{format_int(round(rate))}/sn", border=True)
+        cols[3].metric("Tahmini süre", format_duration(report.projection.get("ön okumalı")), border=True)
+        facts = []
+        if report.rows_per_doc:
+            facts.append(f"belge başına {report.rows_per_doc:.1f} satır")
+        if report.estimated_docs:
+            facts.append(f"~{format_int(report.estimated_docs)} belge")
+        serial = report.projection.get("sıralı")
+        if serial:
+            facts.append(f"ön okuma kapalıyken {format_duration(serial)}")
+        if facts:
+            st.caption(
+                " · ".join(facts)
+                + ". Hızlar belge/sn; tahmin kesintisiz çalışma içindir ve gerçek tablolarda biraz uzun sürebilir."
+            )
+        st.markdown(
+            "\n".join(
+                f"- {_LEVEL_ICONS.get(finding.level, '')} **{finding.topic}** · {finding.text}"
+                for finding in report.findings
+            )
+        )
 
 
 def _range_note(date_filter: dict[str, Any]) -> str:
@@ -1087,13 +1205,18 @@ def render_sidebar_job() -> None:
 
 def _render_result(options: dict, job: transfer_job.JobView) -> None:
     stats = job.stats
-    mode_label = "Artımlı" if options["mode"] == "incremental" else "Tam senkron"
+    # The mode the run really had: a requested incremental pass finishes an
+    # unfinished full load first.
+    mode_label = "Artımlı" if job.mode == "incremental" else "Tam senkron"
     if job.created:
         st.success("Oluşturulan tablolar: " + ", ".join(job.created))
     if job.existing:
         st.caption("Zaten mevcut: " + ", ".join(job.existing))
     if job.status == "cancelled":
-        st.warning("Aktarım durduruldu. Yazılmış partiler SQL'de kaldı.")
+        st.warning(
+            "Aktarım durduruldu. Yazılmış partiler SQL'de kaldı; yeniden başlatınca kontrol "
+            "noktasından devam eder."
+        )
     if job.status == "error":
         theme.error_with_detail(
             "Aktarım yarıda kaldı. Ayrıntı günlükte de var.", job.error or job.message
@@ -1108,31 +1231,54 @@ def _render_result(options: dict, job: transfer_job.JobView) -> None:
     ):
         cols = st.columns(5)
         cols[0].metric("Mod", mode_label, border=True)
-        cols[1].metric("Belge", format_int(stats.documents), border=True)
+        cols[1].metric("Belge", format_int(stats.written), border=True)
         cols[2].metric("Satır", format_int(stats.total_rows), border=True)
-        cols[3].metric("Atlanan", format_int(stats.skipped_no_id), border=True)
+        cols[3].metric("Reddedilen", format_int(stats.rejected), border=True)
         cols[4].metric("Kırpılan", format_int(stats.truncated), border=True)
+        if job.note:
+            st.caption(f"Başlangıç · {job.note}")
         if stats.first_load:
-            st.caption("İlk yükleme: hedef tablo boştu, parti silmeleri atlandı.")
+            st.caption("İlk yükleme: hedef tablolar boştu, parti silmeleri atlandı.")
         st.caption(f"Günlük · `{log_path_display()}`")
         if stats.last_id:
             st.caption(f"İşaret `_id` = `{stats.last_id}`")
+        if stats.widened:
+            st.caption("Genişletilen kolonlar · " + ", ".join(f"`{item}`" for item in stats.widened))
+        if stats.retries:
+            st.caption(f"{format_int(stats.retries)} geçici hata beklenip aşıldı.")
+        if stats.slow_tables:
+            st.caption(
+                "Hızlı yazma yolu çalışmadığı için yavaş yolda yazılan tablolar · "
+                + ", ".join(f"`{table}`" for table in stats.slow_tables)
+            )
         if stats.rows:
             st.dataframe(
                 [{"tablo": table, "satır": count} for table, count in stats.rows.items()],
                 hide_index=True,
                 width="stretch",
             )
-    if stats.documents == 0 and options["mode"] == "incremental" and job.status == "done":
+        if stats.rejects_path:
+            st.caption(f"Red dosyası · `{stats.rejects_path}`")
+            with st.expander("İlk kayıtlar"):
+                st.dataframe(read_lines(stats.rejects_path, 20), hide_index=True, width="stretch")
+    if stats.documents == 0 and job.mode == "incremental" and job.status == "done":
         st.info("Yeni belge yok; işaret zaten güncel.")
     if stats.documents == 0 and options["date_filter"].get("enabled") and job.status == "done":
         st.info("Seçilen tarih aralığında belge bulunamadı.")
-    if stats.skipped_no_id:
-        st.caption(f"{stats.skipped_no_id} belgede `_id` yok, birincil anahtar üretilemedi.")
+    if stats.rejected:
+        st.warning(
+            f"{format_int(stats.rejected)} belge SQL'e yazılamadı ve atlandı; iş durmadı. "
+            "Her birinin `_id`'si ve nedeni red dosyasında."
+        )
     if stats.truncated:
         st.warning(
-            f"{stats.truncated} değer kolon genişliğine kırpıldı. Tam senkron ile "
-            "tam tarama yapıp tabloları yeniden oluşturmak bunu giderir."
+            f"{format_int(stats.truncated)} değer, kolon genişletilemediği için kırpıldı "
+            "(anahtar kolonu ya da ALTER yetkisi yok); red dosyasında listeleniyor."
+        )
+    if stats.nulled:
+        st.caption(
+            f"{format_int(stats.nulled)} değer SQL Server'ın kabul etmeyeceği biçimdeydi "
+            "(NaN, aralık dışı sayı ya da tarih) ve NULL yazıldı; red dosyasında."
         )
 
 
@@ -1177,14 +1323,26 @@ def _run_card(settings: Settings, options: dict, selected: dict | None) -> None:
     with theme.collapsible_card(
         "tr_run", "Çalıştır", _run_summary(settings, options, selected), foldable=False
     ):
-        actions = st.columns([1.6, 1.6, 2.8], vertical_alignment="center")
+        # A load that runs for days belongs in Task Scheduler: here it ends with the UI.
+        needs_confirm = False
+        estimate = collection_count(settings, options["collection"])
+        if estimate and estimate > LARGE_COLLECTION and not busy:
+            st.warning(
+                f"Bu koleksiyon büyük (~{format_int(estimate)} belge). Uzun işleri **Zamanla** "
+                "kartındaki komutla Görev Zamanlayıcı'dan çalıştırın: arayüz kapanırsa buradaki "
+                "iş durur. Durursa kontrol noktasından devam eder."
+            )
+            needs_confirm = not st.checkbox(
+                "Yine de burada başlat", key=f"tr_big_ok_{options['collection']}"
+            )
+        actions = st.columns([1.6, 1.6, 1.4, 2.4], vertical_alignment="center")
         with actions[0]:
             st.button(
                 write_label,
                 key="tr_do_write",
                 type="primary",
                 icon=":material/play_arrow:",
-                disabled=not ready or busy or finished,
+                disabled=not ready or needs_confirm or busy or finished,
                 on_click=_request_run,
                 width="stretch",
                 help="Eksik tabloları oluşturur, sonra belgeleri yazar. Sayfa değiştirmek durdurmaz.",
@@ -1206,15 +1364,33 @@ def _run_card(settings: Settings, options: dict, selected: dict | None) -> None:
                     key="tr_do_again",
                     icon=":material/replay:",
                     on_click=_request_run,
+                    disabled=needs_confirm,
                     width="stretch",
                 )
         with actions[2]:
+            st.button(
+                "Ön kontrol",
+                key="tr_do_check",
+                icon=":material/fact_check:",
+                on_click=_request_preflight,
+                disabled=not ready or busy,
+                width="stretch",
+                help=f"Hiçbir şey yazmadan sürücüyü, yetkileri ve log ayarlarını denetler; "
+                f"{format_int(PROBE_DOCS)} belgeyle hızı ölçüp toplam süreyi tahmin eder.",
+            )
+        with actions[3]:
             if busy:
                 st.caption("Aktarım arka planda sürüyor. Sayfa değiştirmek durdurmaz.")
             elif finished:
                 st.caption("Bu ayarlarla aktarım tamamlandı. Bir ayarı değiştirin ya da yeniden çalıştırın.")
             elif not ready:
                 st.caption("Koleksiyon, kök tablo ve SQL bağlantısı tamamlanınca aktarım açılır.")
+            elif needs_confirm:
+                st.caption("Burada başlatmak için yukarıdaki kutuyu işaretleyin.")
+
+        if not busy:
+            _preflight_if_requested(settings, options, selected)
+            _preflight_view(options)
 
         if busy:
 

@@ -121,12 +121,13 @@ def load_state() -> Settings:
 # --------------------------------------------------------------------------
 
 
-def mongo_client(mongo_cfg: dict[str, Any]) -> MongoClientWrapper:
+def mongo_client(mongo_cfg: dict[str, Any], long_running: bool = False) -> MongoClientWrapper:
     return MongoClientWrapper(
         uri=mongo_cfg.get("uri") or "",
         database=mongo_cfg.get("database") or "",
         username=mongo_cfg.get("username") or None,
         password=mongo_cfg.get("password") or None,
+        long_running=long_running,
     )
 
 
@@ -196,10 +197,41 @@ def sql_target(
 
 
 SQL_WATERMARK_KEY = "sql_watermarks"
+SQL_CHECKPOINT_KEY = "sql_checkpoints"
 
 
 def invalidate_sql_watermarks() -> None:
     st.session_state.pop(SQL_WATERMARK_KEY, None)
+    st.session_state.pop(SQL_CHECKPOINT_KEY, None)
+
+
+def sql_checkpoint(settings: Settings, schema: str, table: str):
+    """
+    This table's checkpoint row, or None (no row, no table, or no connection).
+    Cached per session like the watermark; a finished job clears both.
+    """
+    if not settings.sql_ready or not schema or not table:
+        return None
+    cache = st.session_state.setdefault(SQL_CHECKPOINT_KEY, {})
+    key = f"{settings.mssql.get('server')}|{settings.mssql.get('database')}|{schema}|{table}"
+    if key in cache:
+        return cache[key]
+    from core import checkpoint
+
+    target = sql_target(settings.mssql, settings.mssql_password, schema)
+    row = None
+    try:
+        with st.spinner("Kontrol noktası okunuyor..."):
+            # A running batch holds the row briefly; a stuck one must not hang the page.
+            target.connect(login_timeout=15, query_timeout=15)
+            if target.table_exists(schema, checkpoint.TABLE):
+                row = checkpoint.read(target, schema, table)
+    except Exception:
+        row = None
+    finally:
+        target.close()
+    cache[key] = row
+    return row
 
 
 def sql_table_watermark(
@@ -721,6 +753,8 @@ def profile_one(
     try:
         mongo.connect()
         with st.spinner(f"{name} profilleniyor..."):
+            # This plan is what the transfer writes with, so big collections
+            # get a larger sample: rare long values then shape the widths.
             _, plan = profile_collection(
                 mongo,
                 name,
@@ -731,6 +765,7 @@ def profile_one(
                 settings.headroom,
                 nesting=nesting,
                 query=query,
+                min_large_sample=50_000,
             )
         job.done(belgeler=plan.get("documents"))
         return plan

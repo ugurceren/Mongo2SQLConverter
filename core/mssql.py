@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterator, Sequence
 
 import pyodbc
 
@@ -185,14 +185,74 @@ class MssqlConnection:
             win32security.RevertToSelf()
             token.Close()
 
-    def connect(self) -> pyodbc.Connection:
+    def connect(
+        self, *, login_timeout: int | None = None, query_timeout: int | None = None
+    ) -> pyodbc.Connection:
+        """
+        Open the connection. A transfer passes both timeouts so a hung server
+        or half-open TCP link turns into an error it can retry, not a job that
+        waits forever; interactive checks keep the driver defaults.
+        """
         if self.auth in AUTH_NEEDS_PASSWORD and not self.password:
             raise RuntimeError(
                 "Seçili kimlik doğrulama modu şifre ister; Bağlantılar sayfasından girin."
             )
+        kwargs: dict[str, Any] = {"autocommit": False}
+        if login_timeout:
+            kwargs["timeout"] = login_timeout
         with self._as_windows_user():
-            self._conn = pyodbc.connect(self.connection_string(), autocommit=False)
+            self._conn = pyodbc.connect(self.connection_string(), **kwargs)
+        if query_timeout:
+            # Must be set before cursors are created; applies to every statement.
+            self._conn.timeout = query_timeout
         return self._conn
+
+    def prepare_session(self, lock_timeout_ms: int = 120_000) -> None:
+        """
+        Session rules for a long load: any error aborts the whole transaction
+        (so a batch is all-or-nothing), and a blocked lock fails after a while
+        instead of waiting forever.
+        """
+        cur = self.conn.cursor()
+        cur.execute(f"SET XACT_ABORT ON; SET LOCK_TIMEOUT {int(lock_timeout_ms)};")
+        self.conn.commit()
+
+    def scalar(self, sql: str, *params: Any) -> Any:
+        """First column of the first row of a batch that may start with non-queries."""
+        cur = self.conn.cursor()
+        cur.execute(sql, *params)
+        while cur.description is None:
+            if not cur.nextset():
+                return None
+        row = cur.fetchone()
+        return None if row is None else row[0]
+
+    def get_applock(self, resource: str, timeout_ms: int = 0) -> bool:
+        """
+        Take a session-level exclusive lock on `resource`.
+
+        One writer per target table: the UI and a scheduled task cannot load
+        the same tables at once. The lock dies with the session, so a crashed
+        job never leaves it behind.
+        """
+        result = self.scalar(
+            "DECLARE @r int; "
+            "EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', "
+            "@LockOwner = 'Session', @LockTimeout = ?; "
+            "SELECT @r;",
+            resource,
+            int(timeout_ms),
+        )
+        self.conn.commit()
+        return result is not None and int(result) >= 0
+
+    def release_applock(self, resource: str) -> None:
+        try:
+            cur = self.conn.cursor()
+            cur.execute("EXEC sp_releaseapplock @Resource = ?, @LockOwner = 'Session';", resource)
+            self.conn.commit()
+        except Exception:
+            self.rollback()
 
     @property
     def conn(self) -> pyodbc.Connection:
@@ -327,29 +387,6 @@ class MssqlConnection:
             f"ALTER TABLE [{schema}].[{table}] ADD [{name}] {sql_type} {null}"
         )
 
-    def column_char_widths(self, schema: str, table: str) -> dict[str, int | None]:
-        """NVARCHAR/CHAR declared length. None means MAX (no clip). Missing tables: {}."""
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT c.name, t.name, c.max_length "
-            "FROM sys.columns c "
-            "JOIN sys.tables tb ON tb.object_id = c.object_id "
-            "JOIN sys.schemas s ON s.schema_id = tb.schema_id "
-            "JOIN sys.types t ON t.user_type_id = c.user_type_id "
-            "WHERE s.name = ? AND tb.name = ?",
-            schema,
-            table,
-        )
-        out: dict[str, int | None] = {}
-        for name, type_name, max_length in cur.fetchall():
-            kind = str(type_name).lower()
-            length = int(max_length)
-            if kind in {"nvarchar", "nchar"}:
-                out[str(name)] = None if length < 0 else length // 2
-            elif kind in {"varchar", "char"}:
-                out[str(name)] = None if length < 0 else length
-        return out
-
     def table_exists(self, schema: str, table: str) -> bool:
         cur = self.conn.cursor()
         cur.execute(
@@ -377,6 +414,190 @@ class MssqlConnection:
             return True, None
         return True, row[0]
 
+    def row_count(self, schema: str, table: str) -> int | None:
+        """Rows from metadata (no scan). None when the table does not exist."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT SUM(p.rows) FROM sys.partitions p "
+            "WHERE p.object_id = OBJECT_ID(?, N'U') AND p.index_id IN (0, 1)",
+            f"[{schema}].[{table}]",
+        )
+        row = cur.fetchone()
+        self.conn.commit()
+        return None if row is None or row[0] is None else int(row[0])
+
+    def has_rows(self, schema: str, table: str) -> bool:
+        if not self.table_exists(schema, table):
+            return False
+        cur = self.conn.cursor()
+        cur.execute(f"SELECT TOP (1) 1 FROM [{schema}].[{table}]")
+        found = cur.fetchone() is not None
+        self.conn.commit()
+        return found
+
+    def key_exists(self, schema: str, table: str, key_column: str, key_type: str, key: Any) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            f"SELECT TOP (1) 1 FROM [{schema}].[{table}] WHERE [{key_column}] = CAST(? AS {key_type})",
+            key,
+        )
+        found = cur.fetchone() is not None
+        self.conn.commit()
+        return found
+
+    def column_info(self, schema: str, table: str) -> dict[str, dict[str, Any]]:
+        """
+        Live column facts: SQL type text, nullability, collation, and whether
+        the column may be widened (not part of an index, key or computation).
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT c.name, t.name, c.max_length, c.precision, c.scale, c.is_nullable, "
+            "c.collation_name, c.is_computed, "
+            "CASE WHEN EXISTS (SELECT 1 FROM sys.index_columns ic WHERE ic.object_id = c.object_id "
+            "AND ic.column_id = c.column_id) THEN 1 ELSE 0 END, "
+            "CASE WHEN EXISTS (SELECT 1 FROM sys.foreign_key_columns f WHERE "
+            "(f.parent_object_id = c.object_id AND f.parent_column_id = c.column_id) OR "
+            "(f.referenced_object_id = c.object_id AND f.referenced_column_id = c.column_id)) "
+            "THEN 1 ELSE 0 END "
+            "FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id "
+            "WHERE c.object_id = OBJECT_ID(?, N'U')",
+            f"[{schema}].[{table}]",
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for name, type_name, max_length, precision, scale, nullable, collation, computed, indexed, keyed in cur.fetchall():
+            kind = str(type_name).lower()
+            length = int(max_length)
+            if kind in {"nvarchar", "nchar"}:
+                sql_type = f"{kind.upper()}({'MAX' if length < 0 else length // 2})"
+            elif kind in {"varchar", "char", "varbinary", "binary"}:
+                sql_type = f"{kind.upper()}({'MAX' if length < 0 else length})"
+            elif kind in {"decimal", "numeric"}:
+                sql_type = f"DECIMAL({int(precision)}, {int(scale)})"
+            elif kind in {"datetime2", "datetimeoffset", "time"}:
+                sql_type = f"{kind.upper()}({int(scale)})"
+            else:
+                sql_type = kind.upper()
+            out[str(name)] = {
+                "sql_type": sql_type,
+                "nullable": bool(nullable),
+                "collation": collation,
+                "widenable": not (computed or indexed or keyed),
+            }
+        self.conn.commit()
+        return out
+
+    def widen_column(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        sql_type: str,
+        *,
+        nullable: bool,
+        collation: str | None,
+    ) -> None:
+        """
+        Make a text column wider. Metadata-only for NVARCHAR(n) → (m), but it
+        takes a schema-modification lock. Nullability and collation are restated:
+        ALTER COLUMN resets both when they are left out.
+        """
+        collate = f" COLLATE {collation}" if collation else ""
+        null = "NULL" if nullable else "NOT NULL"
+        cur = self.conn.cursor()
+        cur.execute(f"ALTER TABLE [{schema}].[{table}] ALTER COLUMN [{column}] {sql_type}{collate} {null}")
+        self.conn.commit()
+
+    def referencing_keys(self, schema: str, table: str) -> list[dict[str, Any]]:
+        """Foreign keys that point at `table`, with enough detail to re-create them."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT fk.name, OBJECT_SCHEMA_NAME(fk.parent_object_id), OBJECT_NAME(fk.parent_object_id), "
+            "fk.delete_referential_action_desc, fk.update_referential_action_desc, "
+            "(SELECT COUNT(*) FROM sys.foreign_key_columns x WHERE x.constraint_object_id = fk.object_id), "
+            "COL_NAME(fkc.parent_object_id, fkc.parent_column_id), "
+            "COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) "
+            "FROM sys.foreign_keys fk "
+            "JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id "
+            "WHERE fk.referenced_object_id = OBJECT_ID(?, N'U')",
+            f"[{schema}].[{table}]",
+        )
+        keys = [
+            {
+                "name": row[0],
+                "schema": row[1],
+                "table": row[2],
+                "on_delete": str(row[3] or "NO_ACTION").replace("_", " "),
+                "on_update": str(row[4] or "NO_ACTION").replace("_", " "),
+                "columns": int(row[5]),
+                "column": row[6],
+                "referenced": row[7],
+            }
+            for row in cur.fetchall()
+        ]
+        self.conn.commit()
+        return keys
+
+    def truncate_tables(self, schema: str, root: str, children: Sequence[str]) -> str:
+        """
+        Empty the plan's tables fast and in one transaction.
+
+        TRUNCATE is not allowed on a table other tables reference, so the
+        children's foreign keys are dropped, every table truncated, and the
+        keys re-created with the same names and rules. A crash rolls all of it
+        back. Returns "truncate", or "delete" when that is not possible (a key
+        from outside the plan, no ALTER permission) and batched deletes ran.
+        """
+        wanted = {name.lower() for name in children}
+        keys = self.referencing_keys(schema, root) if self.table_exists(schema, root) else []
+        if all(
+            key["schema"] == schema and key["table"].lower() in wanted and key["columns"] == 1
+            for key in keys
+        ):
+            try:
+                cur = self.conn.cursor()
+                for key in keys:
+                    cur.execute(f"ALTER TABLE [{schema}].[{key['table']}] DROP CONSTRAINT [{key['name']}]")
+                for name in children:
+                    if self.table_exists(schema, name):
+                        cur.execute(f"TRUNCATE TABLE [{schema}].[{name}]")
+                if self.table_exists(schema, root):
+                    cur.execute(f"TRUNCATE TABLE [{schema}].[{root}]")
+                for key in keys:
+                    cur.execute(
+                        f"ALTER TABLE [{schema}].[{key['table']}] WITH CHECK ADD CONSTRAINT [{key['name']}] "
+                        f"FOREIGN KEY ([{key['column']}]) REFERENCES [{schema}].[{root}] ([{key['referenced']}]) "
+                        f"ON DELETE {key['on_delete']} ON UPDATE {key['on_update']}"
+                    )
+                self.conn.commit()
+                return "truncate"
+            except Exception:
+                self.rollback()
+        for name in [*children, root]:
+            self.delete_all(schema, name)
+        return "delete"
+
+    def delete_all(self, schema: str, table: str, chunk: int = 50_000) -> None:
+        """Empty a table in committed slices so the transaction log stays small."""
+        if not self.table_exists(schema, table):
+            return
+        cur = self.conn.cursor()
+        while True:
+            cur.execute(f"DELETE TOP ({int(chunk)}) FROM [{schema}].[{table}]")
+            removed = cur.rowcount
+            self.conn.commit()
+            if removed < chunk:
+                return
+
+    def non_cascading_children(self, schema: str, root: str, children: Sequence[str]) -> list[str]:
+        """Child tables whose rows would not follow a root DELETE on their own."""
+        cascades = {
+            key["table"].lower()
+            for key in (self.referencing_keys(schema, root) if self.table_exists(schema, root) else [])
+            if key["on_delete"].upper() == "CASCADE"
+        }
+        return [name for name in children if name.lower() not in cascades and self.table_exists(schema, name)]
+
     def drop_table(self, schema: str, table: str) -> None:
         cur = self.conn.cursor()
         cur.execute(f"IF OBJECT_ID(N'[{schema}].[{table}]', N'U') IS NOT NULL DROP TABLE [{schema}].[{table}]")
@@ -391,46 +612,33 @@ class MssqlConnection:
     # data movement
     # ----------------------------------------------------------------------
 
-    def clear_table(self, schema: str, table: str) -> None:
-        cur = self.conn.cursor()
-        cur.execute(f"DELETE FROM [{schema}].[{table}]")
-        self.conn.commit()
-
     def delete_keys(
-        self, schema: str, table: str, key_column: str, keys: Sequence[Any], chunk: int = 500
+        self,
+        schema: str,
+        table: str,
+        key_column: str,
+        keys: Sequence[Any],
+        chunk: int = 500,
+        key_type: str | None = None,
     ) -> None:
-        """Remove rows by key so a re-run replaces them (child rows cascade)."""
+        """
+        Remove rows by key so a re-run replaces them (child rows cascade).
+
+        With `key_type` each parameter is cast to the column's own type: an
+        NVARCHAR parameter against a CHAR(24) key can force a scan under SQL_*
+        collations, once per DELETE.
+        """
         if not keys:
             return
         cur = self.conn.cursor()
+        mark = f"CAST(? AS {key_type})" if key_type else "?"
         for start in range(0, len(keys), chunk):
             part = keys[start : start + chunk]
-            marks = ", ".join("?" for _ in part)
+            marks = ", ".join(mark for _ in part)
             cur.execute(
                 f"DELETE FROM [{schema}].[{table}] WHERE [{key_column}] IN ({marks})",
                 *part,
             )
-
-    def insert_rows(
-        self, schema: str, table: str, columns: Sequence[str], rows: Iterable[Sequence[Any]]
-    ) -> int:
-        batch = list(rows)
-        if not batch:
-            return 0
-        cols = ", ".join(f"[{name}]" for name in columns)
-        marks = ", ".join("?" for _ in columns)
-        sql = f"INSERT INTO [{schema}].[{table}] ({cols}) VALUES ({marks})"
-
-        cur = self.conn.cursor()
-        try:
-            cur.fast_executemany = True
-            cur.executemany(sql, batch)
-        except Exception:
-            # fast_executemany rejects some MAX / mixed-width parameter sets;
-            # a plain executemany still gets the batch in.
-            cur = self.conn.cursor()
-            cur.executemany(sql, batch)
-        return len(batch)
 
     def commit(self) -> None:
         self.conn.commit()
@@ -447,14 +655,18 @@ KNOWN_SQL_DRIVERS = (
 )
 
 
-def available_drivers() -> list[str]:
-    found: list[str] = []
+def installed_drivers() -> list[str]:
     try:
-        found = [d for d in pyodbc.drivers() if "SQL Server" in d]
+        return [d for d in pyodbc.drivers() if "SQL Server" in d]
     except Exception:
-        found = []
+        return []
+
+
+def available_drivers() -> list[str]:
+    """Installed drivers first, so a config without `driver` picks one that exists."""
+    found = installed_drivers()
     ordered: list[str] = []
-    for name in (*KNOWN_SQL_DRIVERS, *found):
+    for name in (*(d for d in KNOWN_SQL_DRIVERS if d in found), *found, *KNOWN_SQL_DRIVERS):
         if name not in ordered:
             ordered.append(name)
     return ordered
