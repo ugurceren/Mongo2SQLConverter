@@ -216,6 +216,7 @@ class FakeCursor:
         self.projection = projection
         self.raw = raw
         self._hint = None
+        self._sort = "_id"
         self._min = None
         self._max = None
         self._skip = 0
@@ -227,7 +228,8 @@ class FakeCursor:
         return self
 
     def sort(self, key, direction=1):
-        assert key == "_id" and direction == 1, "the loader reads in ascending _id order"
+        assert direction == 1, "only ascending sorts are used"
+        self._sort = key
         return self
 
     def batch_size(self, size):
@@ -277,9 +279,12 @@ class FakeCursor:
             and (high is None or entry.key < high)
             and (entry.doc is None and not self.query or matches(entry.doc, self.query))
         ]
+        if self._sort != "_id":  # entries are kept in _id order already
+            picked.sort(key=lambda entry: bson_key(_naive(_field(entry.doc or {}, self._sort))))
         picked = picked[self._skip :]
         if self._limit:
             picked = picked[: self._limit]
+        self.store.returned = getattr(self.store, "returned", 0) + len(picked)
         for entry in picked:
             if self.closed:
                 return
@@ -311,7 +316,22 @@ class FakeCollection:
         return FakeCursor(self.store, query or {}, projection, self.raw)
 
     def index_information(self):
-        return {"_id_": {"key": [("_id", 1)]}}
+        info = {"_id_": {"key": [("_id", 1)]}}
+        for name in getattr(self.store, "indexes", ()):
+            info[f"{name}_1"] = {"key": [(name, 1)]}
+        return info
+
+    def find_one(self, query=None, projection=None, sort=None):
+        cursor = self.find(query or {}, projection)
+        if sort:
+            (key, direction), = sort
+            docs = sorted(cursor.sort(key), key=lambda doc: bson_key(_naive(_field(doc, key))), reverse=direction < 0)
+            return docs[0] if docs else None
+        return next(iter(cursor), None)
+
+    def aggregate(self, pipeline, **_):
+        self.store.aggregations = getattr(self.store, "aggregations", []) + [pipeline]
+        return iter(())
 
     def estimated_document_count(self):
         return len(self.store.entries)

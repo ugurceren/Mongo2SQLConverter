@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
@@ -15,6 +15,16 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 logger = logging.getLogger("mongo2sql")
+
+
+SPREAD_STRATA = 64  # points in time a date-range sample is read from
+
+
+def _naive_utc(value: Any) -> Any:
+    """Aware datetimes as naive UTC, the form pymongo reads dates back in."""
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def _value_at(doc: dict[str, Any] | None, path: str) -> Any:
@@ -201,6 +211,54 @@ class MongoClientWrapper:
         """True when an index starts with `field`, so a range scan can use it."""
         return field in self.leading_range_index_fields(collection)
 
+    def _spread_sample(
+        self, collection: str, query: dict[str, Any], size: int, strata: int = SPREAD_STRATA
+    ) -> Iterator[dict[str, Any]] | None:
+        """
+        A sample of a date range read through the field's index, or None.
+
+        `$match` + `$sample` reads and shuffles every document in the range,
+        which on a big collection takes as long as the range is large, however
+        small the sample. Instead the range is cut into `strata` points in time
+        and the next few documents after each are read from the index, so the
+        work follows the sample size and the sample covers the whole period.
+        Only for a single-field range on a field that leads an index.
+        """
+        if len(query) != 1:
+            return None
+        field, bounds = next(iter(query.items()))
+        if not isinstance(bounds, dict) or not bounds or set(bounds) - {"$gte", "$lt"}:
+            return None
+        if field not in self.leading_range_index_fields(collection):
+            return None
+        lower, upper = _naive_utc(bounds.get("$gte")), _naive_utc(bounds.get("$lt"))
+        if lower is None or upper is None:
+            first, last = self.date_bounds(collection, field)
+            lower = lower if lower is not None else first
+            upper = upper if upper is not None else (last + timedelta(milliseconds=1) if last else None)
+        if not isinstance(lower, datetime) or not isinstance(upper, datetime) or upper <= lower:
+            return None
+        return self._read_spread(collection, field, lower, upper, size, strata)
+
+    def _read_spread(
+        self, collection: str, field: str, lower: datetime, upper: datetime, size: int, strata: int
+    ) -> Iterator[dict[str, Any]]:
+        col = self.collection(collection)
+        strata = max(1, min(strata, size))
+        span = upper - lower
+        seen: set[Any] = set()
+        for index in range(strata):
+            # Every point gets its share, so the end of the period is sampled too.
+            quota = size * (index + 1) // strata - size * index // strata
+            start = lower + span * index / strata
+            cursor = col.find({field: {"$gte": start, "$lt": upper}}).sort(field, ASCENDING).limit(quota)
+            for doc in cursor:
+                key = repr(doc.get("_id"))
+                if key in seen:  # a thin stretch reaches into the next one
+                    continue
+                seen.add(key)
+                yield doc
+
     def iter_documents(
         self,
         collection: str,
@@ -213,6 +271,10 @@ class MongoClientWrapper:
         col = self.collection(collection)
         match = query or {}
         if sample:
+            spread = self._spread_sample(collection, match, sample)
+            if spread is not None:
+                yield from spread
+                return
             pipeline: list[dict[str, Any]] = []
             if match:
                 pipeline.append({"$match": match})
