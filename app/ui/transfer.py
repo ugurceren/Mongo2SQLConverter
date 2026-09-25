@@ -50,6 +50,7 @@ from core.transfer import (
     apply_table_names,
     plan_column_rows,
     plan_tables,
+    resolve_table_names,
 )
 
 PLAN_KEY = "transfer_plan"
@@ -813,6 +814,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
             "allow_null": allow_null,
             "mode": "incremental" if incremental else "full",
             "restart": bool(restart),
+            "unfinished": unfinished,
             "schedule_mode": prefs.get("schedule_mode") or "auto",
             "watermark": watermark,
             "table_names": dict(prefs.get("table_names") or {}),
@@ -1067,7 +1069,7 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
         "Tablo adları",
         f"`{settings.mssql.get('database')}` · `{plan['schema']}` — {table_count} tablo",
     ):
-        new_root, new_overrides, duplicates = table_names_editor(
+        new_root, new_overrides, problems, changed = table_names_editor(
             plan,
             overrides,
             editor_key=f"tr_tables_grid_{collection}_{plan['root']['table']}_{sources}_{nonce}",
@@ -1075,21 +1077,34 @@ def _tables_card(settings: Settings, options: dict, plan: dict) -> dict:
         st.caption(
             "SQL adı kolonunu düzenleyin, ardından **Tablo adlarını kaydet** ile yazın. "
             "Boş bırakılan alt tablolar kök addan türemeye devam eder. "
-            "Adlar PascalCase'e çevrilir; aynı isim iki tabloda kullanılamaz."
+            "Adlar PascalCase'e çevrilir; büyük/küçük harf farkı ayrı ad sayılmaz. "
+            "Ad değiştirmek SQL'deki tabloyu yeniden adlandırmaz: yeni adla yeni bir tablo oluşur, "
+            "eski tablo ve satırları olduğu gibi kalır."
         )
-        if duplicates:
-            st.warning(
-                "Bu adlar birden fazla tabloda yazıldı, ikincisi yok sayıldı: "
-                + ", ".join(duplicates)
+        if problems:
+            st.error("Bu adlarla kaydedilemez:\n\n" + "\n".join(f"- {problem}" for problem in problems))
+        elif changed:
+            st.info(
+                "Kaydedilmemiş değişiklik var. Aktarım ve **Zamanla** komutu kaydedilmiş adları kullanır."
             )
+            if options.get("unfinished"):
+                st.warning(
+                    "Bu tablolara yarım kalmış bir tam yükleme yazıyor. Alt tablo adını şimdi "
+                    "değiştirirseniz kalan belgeler yeni tabloya yazılır, yazılmış satırlar eski "
+                    "tabloda kalır. Kök tablonun adı değişirse yükleme yeni tablolarda baştan başlar."
+                )
         saved = st.button(
             "Tablo adlarını kaydet",
             type="primary",
             key=f"tr_tables_save_{collection}_{nonce}",
+            disabled=bool(problems) or not changed,
             width="stretch",
         )
     if saved:
-        options["table_names"] = new_overrides
+        # Names for tables this plan does not show (excluded, or an array this
+        # sample missed) stay saved.
+        _, elsewhere = resolve_table_names(plan, overrides)
+        options["table_names"] = {**{key: overrides[key] for key in elsewhere}, **new_overrides}
         if new_root != options["table"]:
             st.session_state[_pending_table_key(collection)] = new_root
             options["table"] = new_root

@@ -32,8 +32,10 @@ from core.transfer import (
     apply_column_selection,
     apply_table_names,
     ensure_tables,
+    plan_table_problems,
     plan_tables,
     relax_nullability,
+    resolve_table_names,
     retarget_plan,
     transfer_collection,
 )
@@ -206,6 +208,10 @@ def execute_transfer(
     checkpoint pointing into empty tables.
     """
     plan = request.plan
+    # Before any SQL: two tables under one name would mix their rows into one table.
+    problems = plan_table_problems(plan)
+    if problems:
+        raise ValueError("Tablo adları kullanılamaz. " + " ".join(problems))
     schema = plan["schema"]
     root = plan["root"]["table"]
     children = [child["table"] for child in plan["children"]]
@@ -487,7 +493,16 @@ def _profile_plan(source: MongoClientWrapper, job: JobInputs, *, full_profile: b
         plan = relax_nullability(plan)
     columns = job.prefs["columns"]
     plan = apply_column_selection(plan, columns["exclude"], columns["exclude_tables"])
-    plan = apply_table_names(plan, job.prefs.get("table_names"))
+    names = job.prefs.get("table_names")
+    _, unknown = resolve_table_names(plan, names)
+    if unknown:
+        # Not an error: a rare array can be missing from this run's sample.
+        log.warning(
+            "tablo adı hiçbir tabloya uymadı, yok sayıldı: %s (kaynak yolları: %s)",
+            ", ".join(unknown),
+            ", ".join(child["source"] for child in plan["children"]) or "-",
+        )
+    plan = apply_table_names(plan, names)
     log.info("aktarım hedefleri collection=%s tablolar=%s", job.name, ", ".join(plan_tables(plan)))
     return plan
 

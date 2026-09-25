@@ -625,21 +625,26 @@ def table_names_editor(
     overrides: dict[str, str],
     *,
     editor_key: str,
-) -> tuple[str, dict[str, str], list[str]]:
+) -> tuple[str, dict[str, str], list[str], bool]:
     """
     Let the user rename generated SQL tables.
 
-    Returns (root_table, child_overrides, duplicate_names). Child overrides are
-    keyed by Mongo source path and only kept when they differ from the generated
-    name, so a later kök-tablo rename still updates untouched children.
+    Returns (root_table, child_overrides, problems, changed). Child overrides
+    are keyed by Mongo source path and only kept when they differ from the
+    name the (new) root would give, so a later kök-tablo rename still updates
+    untouched children. `problems` lists names SQL Server would see as one
+    table, checked on every table's final name, not only the typed ones.
     """
+    from core.transfer import resolve_table_names, table_name_problems
+
+    resolved, _ = resolve_table_names(plan, overrides)
     generated_root = plan["root"]["table"]
     items: list[tuple[str, str, str, str]] = [
         ("", "(kök tablo)", generated_root, generated_root)
     ]
     for child in plan["children"]:
         generated = child["table"]
-        custom = str(overrides.get(child["source"]) or "").strip()
+        custom = str(resolved.get(child["source"]) or "").strip()
         items.append(
             (
                 child["source"],
@@ -654,7 +659,7 @@ def table_names_editor(
     head[1].caption("üretilen")
     head[2].caption("SQL adı")
 
-    typed: list[tuple[str, str, str]] = []
+    typed: list[tuple[str, str, str, str]] = []
     for i, (path, source_label, generated, sql_name) in enumerate(items):
         cols = st.columns([2, 2, 2.4], vertical_alignment="center")
         cols[0].markdown(f"`{source_label}`")
@@ -666,6 +671,7 @@ def table_names_editor(
             (
                 path,
                 generated,
+                sql_name,
                 cols[2].text_input(
                     "SQL adı",
                     key=widget_key,
@@ -674,22 +680,28 @@ def table_names_editor(
             )
         )
 
-    new_root = generated_root
+    _, root_generated, _, root_raw = typed[0]
+    new_root = sql_table_ident(_editor_cell_text({"sql_name": root_raw}, "sql_name", fallback=root_generated))
     new_overrides: dict[str, str] = {}
-    seen: dict[str, str] = {}
-    duplicates: list[str] = []
-    for path, generated, raw in typed:
-        name = sql_table_ident(_editor_cell_text({"sql_name": raw}, "sql_name", fallback=generated))
-        folded = name.lower()
-        if folded in seen:
-            duplicates.append(name)
-            continue
-        seen[folded] = path
-        if path == "":
-            new_root = name
-        elif name != generated:
+    current_overrides: dict[str, str] = {}
+    final: list[tuple[str, str]] = [("kök tablo", new_root)]
+    for path, generated, shown, raw in typed[1:]:
+        # The name this table gets from the root when nobody overrides it.
+        derived = new_root + generated[len(generated_root) :] if generated.startswith(generated_root) else generated
+        typed_name = sql_table_ident(_editor_cell_text({"sql_name": raw}, "sql_name", fallback=derived))
+        if shown != generated:
+            current_overrides[path] = shown
+        if typed_name == shown:
+            # Left as it was: a saved name stays, a generated one follows the root.
+            name = shown if path in current_overrides else derived
+        else:
+            name = typed_name
+        if name != derived:
             new_overrides[path] = name
-    return new_root, new_overrides, duplicates
+        final.append((path, name))
+    problems = table_name_problems(final)
+    changed = new_root != generated_root or new_overrides != current_overrides
+    return new_root, new_overrides, problems, changed
 
 
 # --------------------------------------------------------------------------

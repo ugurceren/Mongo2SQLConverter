@@ -86,7 +86,7 @@ Tek Windows görevi yeter; iki ayrı görev gerekmez.
 İndirilen `.bat` / `.ps1` `--collection` ile birlikte `--table` (kök SQL tablosu) ve varsa `--rename yol=Tablo` taşır. Görev bu tablolara kilitlenir; uygulamada başka koleksiyon seçmek veya o koleksiyonun adını sonradan değiştirmek eski dosyayı etkilemez. Eski stil (yalnız `--collection`) hâlâ `config.local.yaml` kaydını okur.
 
 ```powershell
-python tools/run_transfer.py --collection conversations --mode auto --schema dbo --table Conversations --rename "messages[]=ConvMessages"
+python tools/run_transfer.py --collection conversations --mode auto --schema dbo --table Conversations --rename "messages=ConvMessages"
 ```
 
 `--mode full` tabloyu yeniden doldurur; yarım kalmış bir tam yükleme varsa önce onu bitirir. `--mode incremental` her zaman artımlıdır (işaret yoksa yine tüm belgeleri okur).
@@ -139,6 +139,11 @@ Tablo adlari **PascalCase** uretilir: `hybrid_conversations` koleksiyonu `Hybrid
 **Kolon adlari degismez.** Mongo alan adi neyse kolon adi odur (`createdAt` -> `createdAt`), boylece kolona bakip hangi alandan geldigi anlasilir.
 
 Kok tablo adini **SQL aktarimi** sayfasindaki **Kok tablo** kutusundan ya da **Tablo adlari** listesinden degistirebilirsiniz; ne yazarsaniz yazin PascalCase'e cevrilir. Alt tablolar varsayilan olarak o ada gore yeniden adlandirilir (`Conversations` + `messages` -> `ConversationsMessages`). Liste icindeki **SQL adi** kolonundan her tabloyu ayri ayri yazabilirsiniz; uretilen ada esit birakanlar kok degisince yeniden turer. Ozel adlar `config.local.yaml` icinde koleksiyon basina `table_names` olarak saklanir. Zamanlanan `.bat` / `.ps1` indirme anindaki tablo adlarini `--table` / `--rename` olarak gomdugu icin her gorev kendi tablosuna yazar.
+
+- Adlar ancak **Tablo adlarını kaydet** ile kaydedildikten sonra aktarıma ve Zamanla komutuna geçer. Kart, kaydedilmemiş bir değişiklik olduğunda bunu belirtir.
+- İki tablo aynı adı alamaz. SQL Server varsayılan collation'da büyük/küçük harfi ayırt etmediği için `ConvTags` ile `convtags` da aynı ad sayılır. Kontrol noktası tablosunun adı (`Mongo2SqlCheckpoint`) da kullanılamaz. Kart böyle bir adı kaydetmez; elle yazılmış bir ayar olursa aktarım SQL'e dokunmadan durur.
+- `--rename` anahtarı, kartın **kaynak** kolonundaki yoldur: `messages`, `messages[].attachments`. Sonda `[]` yazmak (`messages[]`) da kabul edilir. Hiçbir tabloya uymayan anahtar günlüğe uyarı olarak yazılır ve yok sayılır.
+- Ad değiştirmek SQL'deki tabloyu yeniden adlandırmaz. Yeni adla yeni bir tablo oluşur; eski tablo ve satırları olduğu gibi kalır. Veriyi yeni ada taşımak için tabloyu SQL'de `sp_rename` ile yeniden adlandırın ya da yeni adlarla tabloları boşaltıp tam senkron çalıştırın.
 
 Onceki surumler `conversations_messages` gibi adlar uretiyordu. Eski adlarla olusmus tablolariniz varsa yeni adlar ayri tablolar olur; eskilerini elle yeniden adlandirin ya da birakin.
 

@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterator, Sequence
 
 from bson import Binary, Decimal128, ObjectId
 
+from core.checkpoint import TABLE as CHECKPOINT_TABLE
 from core.checkpoint import RunPlan
 from core.convert import Flattener
 from core.inspect import ddl_statements, key_column_type, sql_table_ident
@@ -80,32 +81,101 @@ def plan_tables(plan: dict[str, Any]) -> list[str]:
     return [plan["root"]["table"], *(child["table"] for child in plan["children"])]
 
 
-def apply_table_names(plan: dict[str, Any], names: dict[str, str] | None) -> dict[str, Any]:
-    """
-    Override generated SQL table names.
+def _loose_source(path: str) -> str:
+    return path.replace("[]", "").strip()
 
-    `names` is keyed by Mongo source: `""` is the root table, child tables use
-    `child["source"]`. Empty values keep the generated name. Values are passed
-    through `sql_table_ident` so they stay valid SQL identifiers.
+
+def resolve_table_names(
+    plan: dict[str, Any], names: dict[str, str] | None
+) -> tuple[dict[str, str], list[str]]:
+    """
+    Match user table names to the plan's tables.
+
+    Keys are Mongo source paths as the Tablo adları card shows them
+    (`messages`, `messages[].attachments`); `""` is the root table. A key
+    written with array markers (`messages[]`) or without them
+    (`messages.attachments`) also matches, when it points at exactly one
+    table. Returns ({source: name}, keys that match no table).
     """
     if not names:
+        return {}, []
+    sources = [child["source"] for child in plan["children"]]
+    loose: dict[str, list[str]] = {}
+    for source in sources:
+        loose.setdefault(_loose_source(source), []).append(source)
+    resolved: dict[str, str] = {}
+    unknown: list[str] = []
+    for raw_key, raw_name in names.items():
+        key = str(raw_key).strip()
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        if key == "" or key in sources:
+            resolved[key] = name
+            continue
+        matches = loose.get(_loose_source(key), [])
+        # An exact key for the same table wins over a loosely written one.
+        if len(matches) == 1 and matches[0] not in names:
+            resolved[matches[0]] = name
+        else:
+            unknown.append(key)
+    return resolved, unknown
+
+
+def apply_table_names(plan: dict[str, Any], names: dict[str, str] | None) -> dict[str, Any]:
+    """
+    Override generated SQL table names (see `resolve_table_names` for keys).
+
+    Empty values keep the generated name. Values are passed through
+    `sql_table_ident` so they stay valid SQL identifiers.
+    """
+    resolved, _ = resolve_table_names(plan, names)
+    if not resolved:
         return plan
     out = dict(plan)
     root = dict(plan["root"])
-    custom_root = str(names.get("") or "").strip()
-    if custom_root:
-        root["table"] = sql_table_ident(custom_root)
+    if resolved.get(""):
+        root["table"] = sql_table_ident(resolved[""])
     out["root"] = root
 
     children = []
     for child in plan["children"]:
         renamed = dict(child)
-        custom = str(names.get(child["source"]) or "").strip()
+        custom = resolved.get(child["source"])
         if custom:
             renamed["table"] = sql_table_ident(custom)
         children.append(renamed)
     out["children"] = children
     return out
+
+
+def table_name_problems(tables: Sequence[tuple[str, str]]) -> list[str]:
+    """
+    Why a set of (label, table name) pairs cannot be written, or [].
+
+    SQL Server compares names without regard to case under the usual
+    collations, so `ConvTags` and `convtags` are one table; the checkpoint
+    table's name belongs to the loader.
+    """
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for label, table in tables:
+        groups.setdefault(table.lower(), []).append((label, table))
+    problems: list[str] = []
+    for folded, entries in groups.items():
+        if folded == CHECKPOINT_TABLE.lower():
+            problems.append(f"`{entries[0][1]}` aktarımın kontrol noktası tablosunun adı; başka bir ad seçin.")
+        if len(entries) > 1:
+            spelled = " / ".join(dict.fromkeys(table for _, table in entries))
+            labels = ", ".join(label for label, _ in entries)
+            problems.append(f"`{spelled}` birden fazla tabloya verilmiş: {labels}.")
+    return problems
+
+
+def plan_table_problems(plan: dict[str, Any]) -> list[str]:
+    return table_name_problems(
+        [("kök tablo", plan["root"]["table"])]
+        + [(child["source"], child["table"]) for child in plan["children"]]
+    )
 
 
 def watermark_from_sql_value(value: Any) -> dict[str, str] | None:
