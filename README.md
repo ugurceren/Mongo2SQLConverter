@@ -161,6 +161,12 @@ db.conversations.createIndex({ createdAt: 1 })
 
 Aralik yalnizca yazmayi degil profillemeyi de daraltir, boylece kolon genisliklerini o donemin verisi belirler. Dizi elemani icindeki tarihlere gore filtreleme desteklenmez.
 
+**Büyük koleksiyonda dönem yüklemesi (örneğin yıllık tam senkron):** Seçilen tarih alanı bir index'in ilk alanıysa hem profil örneği hem aktarım o index üzerinden okunur. Süre koleksiyonun büyüklüğüne değil, aralıktaki belge sayısına bağlıdır.
+- Aktarım aralığı ~100.000 belgelik tarih pencerelerine böler; kontrol noktası pencerenin başını tutar.
+- Kesilen iş yeniden başlatılınca o pencereyi baştan okur. O çalışmada her parti yazmadan önce kendi anahtarlarını siler, belge iki kez yazılmaz.
+- Böyle bir yüklemeden sonraki `auto` çalışması, tablodaki en büyük `mongo_id`'den artımlı devam eder.
+- Index yoksa aralık `_id` sırasıyla okunur ve sunucu koleksiyonun tamamına bakar. 350 milyonluk bir koleksiyonda bu, bir günlük aralık için bile saatler demektir. Index'i bir kez, yoğun olmayan bir saatte oluşturun: `db.<koleksiyon>.createIndex({ <tarihAlani>: 1 })`.
+
 **Kolon secimi:** Kolonlar kartinda planin her kolonu ve alt tablosu tek tek kapatilabilir. `mongo_id`, alt tablo anahtarlari ve dizi sira kolonlari her zaman aktarilir. Bir alt tablonun butun kolonlari kapatilirsa o tablo hic olusturulmaz. Liste koleksiyonun profilinden gelir; koleksiyon ve kok tablo secildigi anda profil otomatik cikarilir.
 
 Iki secim de `config.local.yaml` icine koleksiyon basina yazilir, uygulama yeniden acildiginda geri yuklenir. Ayni kayda kirilim, kok tablo, sema, yazma partisi, `table_names` ve `schedule_mode` da eklenir; CLI / Gorev Zamanlayici bunlari okur.

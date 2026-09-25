@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
 import bson
@@ -24,7 +25,7 @@ from bson import CodecOptions, Decimal128
 from bson.codec_options import DatetimeConversion
 from bson.raw_bson import RawBSONDocument
 
-from core.checkpoint import MISSING
+from core.checkpoint import MISSING, is_window, window
 from core.retry import TIMEOUT, TRANSIENT, Retrier, classify_mongo, describe
 
 LENIENT = CodecOptions(
@@ -42,6 +43,54 @@ class SourceDoc:
     doc: dict[str, Any] | None  # None when the document could not be decoded
     size: int  # raw BSON bytes
     error: str | None = None
+    position: Any = None  # resume point to checkpoint after it; None means its `_id`
+
+
+def _naive_utc(value: Any) -> Any:
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _field_value(doc: dict[str, Any] | None, path: str) -> Any:
+    current: Any = doc
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _seen_key(value: Any) -> Any:
+    try:
+        hash(value)
+        return value
+    except TypeError:
+        return repr(value)
+
+
+def leading_index(collection, field: str) -> str | None:
+    """Name of the smallest index that starts with `field`, or None."""
+    try:
+        info = collection.index_information()
+    except Exception:
+        return None
+    names = [
+        (len(spec.get("key") or []), name)
+        for name, spec in info.items()
+        if (spec.get("key") or [(None,)])[0][0] == field
+    ]
+    return min(names)[1] if names else None
+
+
+def date_range_of(query: dict[str, Any] | None) -> tuple[str, Any, Any] | None:
+    """(field, lower, upper) when `query` is one field's `$gte` / `$lt` range, else None."""
+    if not query or len(query) != 1:
+        return None
+    field, bounds = next(iter(query.items()))
+    if not isinstance(bounds, dict) or not bounds or set(bounds) - {"$gte", "$lt"}:
+        return None
+    return field, _naive_utc(bounds.get("$gte")), _naive_utc(bounds.get("$lt"))
 
 
 def projection_for(plan: dict[str, Any]) -> dict[str, int] | None:
@@ -120,6 +169,7 @@ class ChunkedReader:
         batch: int = 1_000,
         max_time_ms: int = 300_000,
         step: int = 200_000,
+        window_docs: int = 100_000,
         retrier: Retrier | None = None,
         should_stop: Callable[[], bool] | None = None,
     ) -> None:
@@ -138,6 +188,12 @@ class ChunkedReader:
         self.pos = start_after
         self.inclusive = False
         self.yielded = 0
+        # Date-index mode (see `_windows`): decided on first use.
+        self.window_docs = max(1, int(window_docs))
+        self._dates: tuple[str, Any, Any, str] | None = None
+        self._dates_decided = False
+        self._window_start: Any = None
+        self._window_seen: set[Any] = set()
 
     def __iter__(self) -> Iterator[SourceDoc]:
         while True:
@@ -146,6 +202,8 @@ class ChunkedReader:
             try:
                 if self.query is None:
                     finished = yield from self._chunk()
+                elif self._date_mode() is not None:
+                    finished = yield from self._windows()
                 else:
                     finished = yield from self._range()
             except Exception as exc:
@@ -189,6 +247,109 @@ class ChunkedReader:
         finally:
             _close(cursor)
         return count < limit
+
+    # -- date-index mode ---------------------------------------------------
+    #
+    # A date range walked in `_id` order makes the server look at every
+    # document of the collection, however narrow the range. When the range is
+    # on a field that leads an index, the documents are read through that index
+    # instead, in windows of about `window_docs` index keys: the work follows
+    # the range, not the collection. The checkpoint then holds the window's
+    # start (`checkpoint.window`), since documents inside a window come in date
+    # order, not `_id` order. After a transient error the window is read again
+    # skipping the `_id`s already handed out; a restarted job reads its window
+    # again and deletes before inserting, so nothing is written twice.
+
+    def _date_mode(self) -> tuple[str, Any, Any, str] | None:
+        if self._dates_decided:
+            return self._dates
+        self._dates_decided = True
+        if self.pos is not MISSING and not is_window(self.pos):
+            return None  # continuing after an `_id`: the `_id` walk
+        found = date_range_of(self.query)
+        if found is None:
+            return None
+        field, lower, upper = found
+        index = leading_index(self._ids, field)
+        if index is None:
+            return None
+        self._dates = (field, lower, upper, index)
+        if is_window(self.pos):
+            self._window_start = _naive_utc(self.pos["window"])
+        else:
+            self._window_start = lower if lower is not None else self._first_date(field, upper, index)
+        return self._dates
+
+    def _date_cursor(self, field: str, lower: Any, upper: Any, index: str, *, strict: bool = False):
+        bounds: dict[str, Any] = {}
+        if lower is not None:
+            bounds["$gt" if strict else "$gte"] = lower
+        if upper is not None:
+            bounds["$lt"] = upper
+        return (
+            self._ids.find({field: bounds}, {field: 1, "_id": 0})
+            .hint(index)
+            .sort(field, 1)
+            .max_time_ms(self.max_time_ms)
+        )
+
+    def _first_value(self, cursor) -> Any:
+        try:
+            for doc in cursor:
+                return _naive_utc(_field_value(doc, self._dates[0] if self._dates else ""))
+        finally:
+            _close(cursor)
+        return None
+
+    def _first_date(self, field: str, upper: Any, index: str) -> Any:
+        self._dates = (field, None, upper, index)
+        return self._first_value(self._date_cursor(field, datetime(1, 1, 1), upper, index).limit(1))
+
+    def _window_end(self, start: Any) -> Any:
+        """Start of the next window, or None when this one reaches the end of the range."""
+        field, _, upper, index = self._dates
+        end = self._first_value(self._date_cursor(field, start, upper, index).skip(self.window_docs).limit(1))
+        if end is not None and end <= start:
+            # More documents share one date than fit a window: that date is one window.
+            end = self._first_value(self._date_cursor(field, start, upper, index, strict=True).limit(1))
+        return end
+
+    def _windows(self):
+        field, _, upper, index = self._dates
+        while True:
+            start = self._window_start
+            if start is None or (upper is not None and start >= upper):
+                return True
+            end = self._window_end(start)
+            bounds: dict[str, Any] = {"$gte": start}
+            if end is not None:
+                bounds["$lt"] = end
+            elif upper is not None:
+                bounds["$lt"] = upper
+            cursor = (
+                self._raw.find({field: bounds}, self.projection)
+                .hint(index)
+                .batch_size(self.batch)
+                .max_time_ms(self.max_time_ms)
+                .comment("mongo2sql")
+            )
+            try:
+                for raw in cursor:
+                    item = self._decode(raw)
+                    key = None if item.id is None else _seen_key(item.id)
+                    if key is not None:
+                        if key in self._window_seen:
+                            continue
+                        self._window_seen.add(key)
+                    item.position = window(start)
+                    self.yielded += 1
+                    yield item
+            finally:
+                _close(cursor)
+            if end is None:
+                return True
+            self._window_start = end
+            self._window_seen = set()
 
     def _range(self):
         """One stretch of the `_id` index, filtered by the date query."""
@@ -252,7 +413,7 @@ class ChunkedReader:
             return SourceDoc(doc.get("_id"), doc, len(data))
         except Exception as exc:
             mongo_id = first_id(data)
-            if mongo_id is MISSING:
+            if mongo_id is MISSING and self._dates is None:  # `_next_id` walks the `_id` index
                 mongo_id = self._next_id()
             return SourceDoc(
                 None if mongo_id is MISSING else mongo_id,

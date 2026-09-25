@@ -225,6 +225,7 @@ class FakeCursor:
 
     def hint(self, spec):
         self._hint = spec
+        self.store.hints = getattr(self.store, "hints", []) + [spec]
         return self
 
     def sort(self, key, direction=1):

@@ -26,6 +26,15 @@ TABLE = "Mongo2SqlCheckpoint"
 MISSING = object()  # "start from the first document"
 
 
+def window(start: Any) -> dict[str, Any]:
+    """Resume point of a load read through a date index: the window it was in."""
+    return {"window": start}
+
+
+def is_window(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {"window"}
+
+
 def table_sql(schema: str) -> str:
     return (
         f"CREATE TABLE [{schema}].[{TABLE}] (\n"
@@ -421,7 +430,8 @@ def plan_run(
     if requested == "full":
         return RunPlan("full", first_load=tables_empty, note="yeni tam yükleme")
 
-    if checkpoint is not None and checkpoint.last_id_json:
+    # A date-window position says nothing about `_id`s: such tables go the MAX way below.
+    if checkpoint is not None and checkpoint.last_id_json and not is_window(checkpoint.last_id):
         start = _overlap(checkpoint.last_id, overlap_minutes)
         return RunPlan("incremental", start_after=start, note="kontrol noktasından artımlı")
 

@@ -202,3 +202,67 @@ class RangeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def dated_store(count: int, *, indexed: bool = True, same_day: int = 0) -> fakes.MongoStore:
+    """Dates out of `_id` order, so reading by date and by `_id` differ."""
+    store = fakes.MongoStore()
+    for i in range(count):
+        hour = 0 if i < same_day else (i * 37) % count
+        store.add({"_id": i, "createdAt": START + timedelta(hours=hour), "n": i})
+    store.indexes = ("createdAt",) if indexed else ()
+    return store
+
+
+def in_range(store, lower, upper):
+    return sorted(e.id for e in store.entries if lower <= e.doc["createdAt"] < upper)
+
+
+class DateWindowTests(unittest.TestCase):
+    LOWER = START + timedelta(hours=30)
+    UPPER = START + timedelta(hours=150)
+
+    def query(self, lower=None, upper=None):
+        from datetime import timezone
+
+        bounds = {"$gte": (lower or self.LOWER).replace(tzinfo=timezone.utc)}
+        bounds["$lt"] = (upper or self.UPPER).replace(tzinfo=timezone.utc)
+        return {"createdAt": bounds}
+
+    def test_reads_the_range_through_the_date_index_once(self):
+        store = dated_store(200)
+        reader = ChunkedReader(fakes.FakeCollection(store), query=self.query(), window_docs=7)
+        items = read_all(reader)
+        self.assertEqual(sorted(item.id for item in items), in_range(store, self.LOWER, self.UPPER))
+        self.assertTrue(all(item.position and set(item.position) == {"window"} for item in items))
+        self.assertIn("createdAt_1", store.hints)
+        self.assertEqual(store.delivered, len(items))  # nothing outside the range came back
+
+    def test_transient_errors_mid_window_repeat_nothing(self):
+        store = dated_store(200)
+        store.faults = {5: errors.AutoReconnect("reset"), 61: errors.CursorNotFound("gone", 43)}
+        items = read_all(ChunkedReader(fakes.FakeCollection(store), query=self.query(), window_docs=25, retrier=retrier()))
+        ids = [item.id for item in items]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(sorted(ids), in_range(store, self.LOWER, self.UPPER))
+
+    def test_one_date_bigger_than_a_window(self):
+        store = dated_store(200, same_day=60)
+        items = read_all(ChunkedReader(fakes.FakeCollection(store), query=self.query(START, self.UPPER), window_docs=10))
+        self.assertEqual(sorted(i.id for i in items), in_range(store, START, self.UPPER))
+
+    def test_resume_starts_at_the_saved_window(self):
+        from core.checkpoint import window
+
+        store = dated_store(200)
+        restart = START + timedelta(hours=90)
+        items = read_all(ChunkedReader(fakes.FakeCollection(store), query=self.query(), start_after=window(restart)))
+        self.assertEqual(sorted(i.id for i in items), in_range(store, restart, self.UPPER))
+
+    def test_without_index_or_after_an_id_the_id_walk_stays(self):
+        plain = dated_store(200, indexed=False)
+        items = read_all(ChunkedReader(fakes.FakeCollection(plain), query=self.query()))
+        self.assertTrue(all(item.position is None for item in items))
+        indexed = dated_store(200)
+        items = read_all(ChunkedReader(fakes.FakeCollection(indexed), query=self.query(), start_after=100))
+        self.assertTrue(all(item.position is None and item.id > 100 for item in items))

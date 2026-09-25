@@ -32,6 +32,7 @@ from app.ui.services import (
     stored_plan,
     table_names_editor,
 )
+from core.checkpoint import is_window
 from core.inspect import LARGE_COLLECTION, nesting_labels, render_database_ddl, sql_table_ident
 from core.logutil import log_path_display
 from core.mongo import date_range_filter
@@ -755,7 +756,8 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 ),
             )
         if incremental:
-            if point is not None and point.last_id_json:
+            # A date-window checkpoint is no `_id` mark; incremental goes by the table's MAX then.
+            if point is not None and point.last_id_json and not is_window(point.last_id):
                 watermark = {"last_id": _checkpoint_id(point), "updated": str(point.updated_at or "")[:19]}
                 watermark_source = "checkpoint"
             else:
@@ -865,6 +867,9 @@ def _checkpoint_id(point) -> str:
         value = point.last_id
     except Exception:
         return str(point.last_id_json)
+    if is_window(value):
+        start = value["window"]
+        return f"tarih penceresi {start:%d.%m.%Y %H:%M}" if hasattr(start, "strftime") else str(start)
     return str(value)
 
 

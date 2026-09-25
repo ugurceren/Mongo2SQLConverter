@@ -73,6 +73,7 @@ class Unit:
     notes: list[Note] = field(default_factory=list)
     overflow: dict[Column, int] = field(default_factory=dict)
     logged: bool = False  # its reject / notes are already in the rejects file
+    position: Any = None  # checkpoint position after it, when not its `_id` (date windows)
 
 
 # --------------------------------------------------------------------------
@@ -458,8 +459,9 @@ class BatchWriter:
                 self.ops.insert(table, rows, slow=table in slow_now or table in self.stats.slow_tables)
         self._current = None
         inserted = time.perf_counter()
+        last = units[-1]
         self.ops.advance(
-            last_id=units[-1].id,
+            last_id=last.id if last.position is None else last.position,
             docs_done=units[-1].seq,
             written=len(live),
             rows=sum(unit.rows for unit in live),

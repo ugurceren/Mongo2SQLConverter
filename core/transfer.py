@@ -28,7 +28,7 @@ from typing import Any, Callable, Iterator, Sequence
 from bson import Binary, Decimal128, ObjectId
 
 from core.checkpoint import TABLE as CHECKPOINT_TABLE
-from core.checkpoint import RunPlan
+from core.checkpoint import RunPlan, is_window
 from core.convert import Flattener
 from core.inspect import ddl_statements, key_column_type, sql_table_ident
 from core.logutil import JobLog, get_logger
@@ -806,11 +806,12 @@ _DONE = object()
 
 
 def _unit(item: SourceDoc, seq: int, flattener: Flattener) -> Unit:
+    where = item.position
     if item.doc is None:
-        return Unit(seq, item.id, size=item.size, reject="decode_error", stage="decode", error=item.error)
+        return Unit(seq, item.id, size=item.size, reject="decode_error", stage="decode", error=item.error, position=where)
     flat = flattener.flatten(item.doc)
     if flat.reject is not None:
-        return Unit(seq, item.id, size=item.size, reject=flat.reject, stage="flatten", error=flat.reject)
+        return Unit(seq, item.id, size=item.size, reject=flat.reject, stage="flatten", error=flat.reject, position=where)
     return Unit(
         seq,
         item.id,
@@ -821,6 +822,7 @@ def _unit(item: SourceDoc, seq: int, flattener: Flattener) -> Unit:
         rows=flat.rows,
         notes=flat.notes,
         overflow=flat.overflow,
+        position=where,
     )
 
 
@@ -878,15 +880,17 @@ def transfer_collection(
 
     flattener = Flattener(plan, key_type)
     child_tables = [child["table"] for child in plan["children"]]
+    # A load resumed inside a date window reads that window again: delete first.
+    first_load = run.first_load and not (run.resume and is_window(run.start_after))
     writer = BatchWriter(
         ops,
         plan,
         flattener.columns,
-        first_load=run.first_load,
+        first_load=first_load,
         rejects=rejects,
         retrier=Retrier("sql", retry_policy, log=log, should_stop=stopping),
         max_rejects=max_rejects,
-        non_cascading=[] if run.first_load else db.non_cascading_children(schema, root_table, child_tables),
+        non_cascading=[] if first_load else db.non_cascading_children(schema, root_table, child_tables),
         log=log,
     )
     mongo_retrier = Retrier("mongo", retry_policy, log=log, should_stop=stopping)
@@ -900,7 +904,7 @@ def transfer_collection(
         **(reader_options or {}),
     )
 
-    stats = TransferStats(mode=run.mode, first_load=run.first_load, resumed=run.resume, note=run.note)
+    stats = TransferStats(mode=run.mode, first_load=first_load, resumed=run.resume, note=run.note)
     stats.rejects_path = str(rejects.path)
     job = JobLog(
         "aktarım",
@@ -908,7 +912,7 @@ def transfer_collection(
         tablo=f"{schema}.{root_table}",
         mod=run.mode,
         parti=batch_docs,
-        ilk_yükleme=run.first_load,
+        ilk_yükleme=first_load,
         devam=run.resume,
         **(log_extra or {}),
     )

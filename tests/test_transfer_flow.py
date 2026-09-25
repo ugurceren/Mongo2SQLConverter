@@ -78,7 +78,7 @@ class Flow:
             resume_count=point["resume_count"],
         )
 
-    def run(self, requested="auto", *, restart=False, should_stop=None, prefetch=True, plan=None, batch_docs=120):
+    def run(self, requested="auto", *, restart=False, should_stop=None, prefetch=True, plan=None, batch_docs=120, query=None, window_docs=None):
         plan = plan or self.plan
         row = self.checkpoint_row()
         root_empty = not self.server.tables[self.root]
@@ -88,7 +88,7 @@ class Flow:
             checkpoint=row,
             restart=restart,
             plan_hash_value=cp.plan_hash(plan),
-            filter_hash_value=cp.filter_hash(None),
+            filter_hash_value=cp.filter_hash(query),
             tables_empty=tables_empty,
             root_empty=root_empty,
             key_type=self.key_type,
@@ -103,7 +103,7 @@ class Flow:
             status="running",
             first_load=run.first_load,
             plan_hash=cp.plan_hash(plan),
-            filter_hash=cp.filter_hash(None),
+            filter_hash=cp.filter_hash(query),
             last_id=row.last_id if keep_mark else MISSING,
             docs_done=run.docs_done,
             docs_written=run.carried.get("docs_written", 0),
@@ -128,7 +128,8 @@ class Flow:
                 expected_count=len(self.store.entries),
                 should_stop=should_stop,
                 prefetch=prefetch,
-                reader_options={"chunk": 300, "batch": 50},
+                query=query,
+                reader_options={"chunk": 300, "batch": 50, **({"window_docs": window_docs} if window_docs else {})},
                 retry_policy=FAST,
             )
         finally:
@@ -136,12 +137,12 @@ class Flow:
         self.server.checkpoint["status"] = "stopped" if stats.stopped else "completed"
         return run, stats, rejects
 
-    def expected(self, skip=()) -> dict[str, int]:
+    def expected(self, skip=(), query=None) -> dict[str, int]:
         flattener = Flattener(self.plan, self.key_type)
         totals = {table: 0 for table in self.server.tables}
         keys = []
         for entry in self.store.entries:
-            if entry.doc is None or entry.id in skip:
+            if entry.doc is None or entry.id in skip or (query and not fakes.matches(entry.doc, query)):
                 continue
             flat = flattener.flatten(entry.doc)
             keys.append(flat.key)
@@ -272,6 +273,42 @@ class LoadTests(FlowCase):
         self.assertEqual((run.mode, run.resume, run.first_load), ("full", False, False))
         self.assertEqual(self.flow.state(), self.flow.expected())
         self.assertEqual(self.flow.reject_ids(), [])
+
+
+class DateWindowFlowTests(FlowCase):
+    """A year-style load: full sync of a date range, read through the date index."""
+
+    def query(self):
+        lower = min(entry.doc["createdAt"] for entry in self.flow.store.entries)
+        return {"createdAt": {"$gte": lower + timedelta(hours=2), "$lt": lower + timedelta(hours=9)}}
+
+    def test_range_load_stopped_and_resumed_writes_each_document_once(self):
+        flow = self.flow
+        flow.store.indexes = ("createdAt",)
+        query = self.query()
+        wanted = flow.expected(query=query)
+        self.assertGreater(len(wanted["keys"]), 300)
+        _, first, _ = flow.run("full", query=query, window_docs=90, should_stop=self.stop_after(200))
+        self.assertTrue(first.stopped)
+        self.assertTrue(cp.is_window(flow.server.checkpoint["last_id"]))
+        run, second, _ = flow.run("full", query=query, window_docs=90)
+        self.assertTrue(run.resume)
+        self.assertFalse(second.first_load)  # the window is read again: delete first
+        self.assertEqual(flow.state(), wanted)
+        self.assertEqual(flow.reject_ids(), [])
+
+    def test_auto_after_a_range_load_goes_by_max_id(self):
+        flow = self.flow
+        flow.store.indexes = ("createdAt",)
+        flow.run("full", query=self.query(), window_docs=90)
+        row = flow.checkpoint_row()
+        run = plan_run(
+            "auto", checkpoint=row, restart=False, plan_hash_value=cp.plan_hash(flow.plan),
+            filter_hash_value=cp.filter_hash(None), tables_empty=False, root_empty=False,
+            key_type=flow.key_type, legacy_max=max(flow.server.root_keys()), overlap_minutes=0,
+        )
+        self.assertEqual(run.mode, "incremental")
+        self.assertEqual(str(run.start_after), max(flow.server.root_keys()))
 
 
 class IncrementalTests(FlowCase):

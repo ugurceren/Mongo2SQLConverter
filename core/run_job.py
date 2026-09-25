@@ -255,7 +255,8 @@ def execute_transfer(
         tables_empty = root_empty and not any(db.has_rows(schema, table) for table in children)
         legacy_max = None
         yaml_mark: Any = MISSING
-        if (row is None or not row.last_id_json) and not root_empty:
+        # A date-window position is no `_id` mark: tables loaded that way go by MAX(mongo_id).
+        if (row is None or not row.last_id_json or checkpoint.is_window(row.last_id)) and not root_empty:
             legacy_max = db.max_key(schema, root, "mongo_id")[1]
             mark = load_sync_watermark(request.collection)
             if mark:
