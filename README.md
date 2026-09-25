@@ -59,7 +59,7 @@ ALTER ROLE db_ddladmin   ADD MEMBER [svc_mongo2sql];
 python run.py
 ```
 
-Aktarım ve profil satırları `logs/mongo2sql.log` dosyasına yazılır (başlangıç, ilerleme, bitiş, hata). Dosya 10 MB olunca döner. `logs/` git'e eklenmez.
+Aktarım ve profil satırları her gün için ayrı bir dosyaya yazılır: `logs/mongo2sql_2026-09-26.log` gibi (başlangıç, ilerleme, bitiş, hata). Gece yarısını geçen bir iş ertesi günün dosyasında devam eder; arayüz ve zamanlanmış işler aynı günün dosyasına ekler. Eski günlerin dosyaları silinmez. `logs/` git'e eklenmez.
 
 Üst şeritteki ay/güneş düğmesi Streamlit'in kendi koyu/açık temasını seçer (`.streamlit/config.toml` içindeki `[theme.dark]` / `[theme.light]`). Seçim bu tarayıcıda kalır; geçişte sayfa bir kez yenilenir, arka planda süren aktarım etkilenmez. Seçim yapılmamışsa işletim sisteminin teması kullanılır.
 
@@ -117,7 +117,7 @@ Kırılım (`nesting`) yalnız **Şema keşfi** sayfasında seçilir ve seçildi
 1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin. Dosya adı `mongo2sql_<koleksiyon>.bat`; içinde `--table` o koleksiyonun kök tablosudur.
 2. Görev Zamanlayıcı → Görev Oluştur. Eylem: indirilen `.bat`, ya da Program `python.exe` (venv) ve karttaki tam argüman satırı. Başlangıç dizini proje klasörü.
 3. **Windows — bu oturum** kimliği için görevi o Windows kullanıcısıyla ve "kullanıcı oturum açmış olsun" ile çalıştırın (Trusted Connection oturuma bağlıdır).
-4. Çıkış kodu 0 temiz, 2 red ya da kırpmayla tamamlandı, 1 hata. Ayrıntı `logs/mongo2sql.log`.
+4. Çıkış kodu 0 temiz, 2 red ya da kırpmayla tamamlandı, 1 hata. Ayrıntı o günün `logs/mongo2sql_<tarih>.log` dosyasında.
 5. Uzun işler (yüz milyonlarca belge günler sürebilir) için:
    - **Ayarlar** sekmesinde "Görevi şu süreden uzun çalışırsa durdur" varsayılanı **3 gündür**; kapatın ya da süreyi uzatın.
    - "Kullanıcı oturum açmış olsun ya da olmasın çalıştır"ı seçin ve parolayı saklayın ("Parolayı saklama" kutusunu işaretlemeyin). Oturum kapansa da iş sürer, Windows kimliği de ağda çalışır.
@@ -213,7 +213,7 @@ Rapor şunları içerir:
 - Mongo sürümü ve tarih alanının index'i.
 - 5.000 belgelik gerçek bir hız ölçümü: okuma, düzleştirme ve geçici (`#temp`) tablolara yazıp geri alma. Hiçbir şey kalıcı olarak yazılmaz.
 
-Aşama hızlarından toplam süre tahmin edilir. İş başladıktan sonra `logs/mongo2sql.log` içindeki ilerleme satırları gerçek hızı ve kalan süreyi gösterir.
+Aşama hızlarından toplam süre tahmin edilir. İş başladıktan sonra günün `logs/mongo2sql_<tarih>.log` dosyasındaki ilerleme satırları gerçek hızı ve kalan süreyi gösterir.
 
 **Ayarlar** (`config.yaml` → `loader:`):
 
@@ -245,7 +245,7 @@ python tools/bench_transfer.py --docs 20000 --nesting all
 ## Yapi
 
 - `core/inspect.py` — sema profilleme, DRDL/DDL
-- `core/logutil.py` — `logs/mongo2sql.log` dosya günlüğü
+- `core/logutil.py` — günlük dosyalar: `logs/mongo2sql_<tarih>.log`
 - `core/transfer.py` — aktarım akışı: okuma, düzleştirme ve yazma (önceki `flatten_document` referans olarak durur)
 - `core/convert.py` — plandan derlenen, kolon başına dönüştürücülerle düzleştirme
 - `core/reader.py` — `_id` sırasıyla, parça parça ve yeniden başlatılabilir Mongo okuması

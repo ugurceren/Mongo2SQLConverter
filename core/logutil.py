@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from datetime import date
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ from typing import Any
 from core.settings import ROOT
 
 LOG_DIR = ROOT / "logs"
-LOG_FILE = LOG_DIR / "mongo2sql.log"
+LOG_PREFIX = "mongo2sql"
 LOGGER_NAME = "mongo2sql"
 
 # Progress: first batch always, then at least one of these.
@@ -19,24 +21,52 @@ _PROGRESS_EVERY = 25_000
 _PROGRESS_SECONDS = 60.0
 
 
+def log_file_for(day: date) -> Path:
+    """`logs/mongo2sql_2026-09-26.log`: one file per (local) day."""
+    return LOG_DIR / f"{LOG_PREFIX}_{day:%Y-%m-%d}.log"
+
+
+def current_log_file() -> Path:
+    return log_file_for(date.today())
+
+
+class DailyFileHandler(logging.FileHandler):
+    """
+    Writes each record to the file of the day it was made.
+
+    A job running past midnight moves on to the next day's file. The UI and
+    scheduled jobs append to the same day's file; unlike size rotation there is
+    no renaming, so one process cannot pull a file from under another.
+    """
+
+    def __init__(self) -> None:
+        self.day = date.today()
+        super().__init__(log_file_for(self.day), encoding="utf-8", delay=True)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        day = date.fromtimestamp(record.created)
+        if day != self.day:  # the handler lock is held here
+            if self.stream is not None:
+                self.stream.close()
+                self.stream = None
+            self.day = day
+            self.baseFilename = os.path.abspath(log_file_for(day))
+        super().emit(record)
+
+
 def configure_logging() -> Path:
-    """Attach a rotating UTF-8 file handler. Safe to call on every Streamlit rerun."""
+    """Attach the daily UTF-8 file handler. Safe to call on every Streamlit rerun."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    already = any(
-        isinstance(handler, RotatingFileHandler)
-        and Path(getattr(handler, "baseFilename", "")) == LOG_FILE.resolve()
-        for handler in logger.handlers
-    )
-    if not already:
-        handler = RotatingFileHandler(
-            LOG_FILE,
-            maxBytes=10_000_000,
-            backupCount=5,
-            encoding="utf-8",
-        )
+    for handler in list(logger.handlers):
+        # The size-rotated `mongo2sql.log` of earlier versions, in a long-lived process.
+        if isinstance(handler, RotatingFileHandler):
+            logger.removeHandler(handler)
+            handler.close()
+    if not any(isinstance(handler, DailyFileHandler) for handler in logger.handlers):
+        handler = DailyFileHandler()
         handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s [%(levelname)s] %(message)s",
@@ -44,7 +74,7 @@ def configure_logging() -> Path:
             )
         )
         logger.addHandler(handler)
-    return LOG_FILE
+    return current_log_file()
 
 
 def get_logger() -> logging.Logger:
@@ -53,11 +83,12 @@ def get_logger() -> logging.Logger:
 
 
 def log_path_display() -> str:
-    """Path shown in the UI, relative to the project when possible."""
+    """Today's log file as shown in the UI, relative to the project when possible."""
+    path = current_log_file()
     try:
-        return str(LOG_FILE.resolve().relative_to(ROOT.resolve()))
+        return str(path.resolve().relative_to(ROOT.resolve()))
     except ValueError:
-        return str(LOG_FILE)
+        return str(path)
 
 
 def _fmt(value: Any) -> str:

@@ -152,7 +152,7 @@ def _run_card() -> None:
         actions[2].caption("Aktarım arka planda sürüyor. Sayfa değiştirmek durdurmaz.")
         st.progress(0.42)
         st.caption("Tam senkron · `orders` · 5.185 / 12.345 belge")
-        st.caption("Günlük `logs\\mongo2sql.log` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır.")
+        st.caption("Günlük `logs\\mongo2sql_2026-09-26.log` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır.")
 
 
 def _page(step: str, title: str) -> None:
