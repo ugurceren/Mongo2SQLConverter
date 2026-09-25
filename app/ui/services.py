@@ -34,7 +34,7 @@ from core.mssql import (
     auth_mode,
     available_drivers,
 )
-from core.settings import load_connection_overrides, load_settings
+from core.settings import load_connection_overrides, load_settings, save_nesting, saved_nesting
 
 COLLECTIONS_KEY = "collections"
 COLLECTIONS_ERROR_KEY = "collections_error"
@@ -543,17 +543,33 @@ def peek_shape(settings: Settings, collection: str) -> dict[str, Any] | None:
     return cache[cache_key]
 
 
+def current_nesting(
+    settings: Settings, collection: str
+) -> tuple[str, dict[str, Any] | None, list[str], bool]:
+    """
+    The nesting in use for `collection`: this session's pick, else the one
+    saved in config.local.yaml, else the default for its shape.
+
+    Returns (nesting, shape, allowed, is_default).
+    """
+    shape = peek_shape(settings, collection)
+    allowed, default = nesting_keys_for(shape)
+    state_key = nesting_widget_key(collection)
+    if st.session_state.get(state_key) not in allowed:
+        saved = saved_nesting(collection)
+        st.session_state[state_key] = saved if saved in allowed else default
+    nesting = st.session_state[state_key]
+    return nesting, shape, allowed, nesting == default and saved_nesting(collection) != nesting
+
+
 def nesting_choice(
     settings: Settings, collection: str, root_table: str | None = None
 ) -> str:
-    """Ask how to split nested fields — only after a collection is chosen."""
-    shape = peek_shape(settings, collection)
-    allowed, default = nesting_keys_for(shape)
+    """Ask how to split nested fields (Şema keşfi); the pick is saved for the transfer."""
+    current, shape, allowed, _ = current_nesting(settings, collection)
     titles = {item[0]: item[1] for item in NESTING_OPTIONS}
     hints = {item[0]: item[2] for item in NESTING_OPTIONS}
     state_key = nesting_widget_key(collection)
-    if st.session_state.get(state_key) not in allowed:
-        st.session_state[state_key] = default
     root = root_table or sql_table_ident(collection)
 
     with theme.collapsible_card(
@@ -567,7 +583,7 @@ def nesting_choice(
         cols = st.columns(2)
         picked: str | None = None
         for i, key in enumerate(allowed):
-            selected = st.session_state[state_key] == key
+            selected = current == key
             wrap = f"nest_on_{collection}_{key}" if selected else f"nest_off_{collection}_{key}"
             tables, note = preview_tables(key, root, shape)
             shown = tables[:8]
@@ -594,13 +610,47 @@ def nesting_choice(
                         key=f"nest_pick_{collection}_{key}",
                     ):
                         picked = key
-        if picked and picked != st.session_state[state_key]:
+        if picked and picked != current:
             st.session_state[state_key] = picked
+            try:
+                # The transfer page, the CLI and the next session read it from here.
+                save_nesting(collection, picked)
+            except OSError as exc:
+                st.caption(f"Kırılım kaydedilemedi: {exc}")
+                return picked
             st.rerun()
     return st.session_state[state_key]
 
 
 nesting_card = nesting_choice
+
+
+def nesting_summary(
+    settings: Settings, collection: str, root_table: str | None = None
+) -> str:
+    """The nesting in use, read-only: it is chosen on the Şema keşfi page."""
+    nesting, shape, _, is_default = current_nesting(settings, collection)
+    titles = {item[0]: item[1] for item in NESTING_OPTIONS}
+    hints = {item[0]: item[2] for item in NESTING_OPTIONS}
+    with theme.collapsible_card(
+        f"nesting_info_{collection}",
+        "Kırılım",
+        "Şema keşfi sayfasında seçilir; burada yalnız gösterilir.",
+        foldable=False,
+    ):
+        row = st.columns([3.2, 1.4], vertical_alignment="center")
+        with row[0]:
+            label = titles.get(nesting, nesting)
+            st.markdown(f"**{label}**" + (" · varsayılan" if is_default else ""))
+            st.caption(hints.get(nesting, ""))
+        with row[1]:
+            theme.page_cta(
+                "discovery",
+                "Şema keşfinde değiştir",
+                ":material/schema:",
+                f"nesting_cta_{sql_table_ident(collection)}",
+            )
+    return nesting
 
 
 def _editor_cell_text(entry: dict[str, Any], *keys: str, fallback: str) -> str:

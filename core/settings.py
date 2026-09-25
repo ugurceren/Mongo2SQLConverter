@@ -243,6 +243,21 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
     return prefs
 
 
+def saved_nesting(collection: str) -> str | None:
+    """The nesting stored for this collection, or None when none was chosen yet."""
+    stored = (_read_yaml(LOCAL_CONFIG_PATH).get("transfer") or {}).get(collection)
+    if not isinstance(stored, dict):
+        return None
+    return str(stored.get("nesting") or "").strip() or None
+
+
+def save_nesting(collection: str, nesting: str) -> Path:
+    """Store the nesting picked on Şema keşfi, keeping the rest of this collection's prefs."""
+    prefs = load_transfer_prefs(collection)
+    prefs["nesting"] = nesting
+    return save_transfer_prefs(collection, prefs)
+
+
 def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
     if not collection:
         return LOCAL_CONFIG_PATH

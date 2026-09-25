@@ -110,6 +110,8 @@ Diğer bayraklar:
 
 Bağlantı ve job ayarları `config.local.yaml` içindedir (koleksiyon başına `nesting`, `table`, `schema`, `schedule_mode`, `batch`, `sample`, kolon ve tarih tercihleri). SQL şifresi gerekiyorsa dosyada olmalı; Streamlit oturum şifresi CLI'da yoktur.
 
+Kırılım (`nesting`) yalnız **Şema keşfi** sayfasında seçilir ve seçildiği anda kaydedilir. **SQL aktarımı** sayfası bu seçimi yalnız gösterir; değiştirmek için oradaki bağlantıyla Şema keşfine dönülür. Hiç seçilmemişse koleksiyonun yapısına göre varsayılan kullanılır ve "varsayılan" diye belirtilir.
+
 **Windows Görev Zamanlayıcı:**
 
 1. SQL aktarımı sayfasındaki **Zamanla** kartından komutu kopyalayın veya `.ps1` / `.bat` indirin. Dosya adı `mongo2sql_<koleksiyon>.bat`; içinde `--table` o koleksiyonun kök tablosudur.

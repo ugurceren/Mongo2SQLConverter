@@ -149,7 +149,9 @@ def render(settings: Settings) -> None:
     run_collection = False
     if collection:
         st.write("")
-        nesting = nesting_card(settings, collection, sql_table_ident(collection))
+        # The pick is saved; SQL aktarımı shows it read-only.
+        root = load_transfer_prefs(collection).get("table") or sql_table_ident(collection)
+        nesting = nesting_card(settings, collection, root)
         st.write("")
         run_collection = st.button("Şemayı çıkar", type="primary", width="stretch")
 

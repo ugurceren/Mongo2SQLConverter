@@ -23,7 +23,7 @@ from app.ui.services import (
     format_int,
     invalidate_sql_watermarks,
     mongo_client,
-    nesting_card,
+    nesting_summary,
     record_health,
     remember_collection,
     sql_checkpoint,
@@ -31,7 +31,6 @@ from app.ui.services import (
     sql_target,
     stored_plan,
     table_names_editor,
-    nesting_widget_key,
 )
 from core.inspect import LARGE_COLLECTION, nesting_labels, render_database_ddl, sql_table_ident
 from core.logutil import log_path_display
@@ -138,8 +137,6 @@ def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
     st.session_state[f"tr_sample_{collection}"] = int(prefs.get("sample") or 5000)
     st.session_state[f"tr_batch_{collection}"] = int(prefs.get("batch") or 2000)
     st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
-    if prefs.get("nesting"):
-        st.session_state[nesting_widget_key(collection)] = prefs["nesting"]
 
 
 def _job_prefs(options: dict) -> dict:
@@ -679,7 +676,8 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         return options
 
     st.write("")
-    options["nesting"] = nesting_card(
+    # Chosen on Şema keşfi; shown here only, so the two pages cannot disagree.
+    options["nesting"] = nesting_summary(
         settings, collection, options["table"] or sql_table_ident(collection)
     )
 
