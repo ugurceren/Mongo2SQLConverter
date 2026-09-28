@@ -599,13 +599,42 @@ section[data-testid="stMain"] .block-container {
     font-weight: 700;
     margin: 0 0 0.35rem 0.15rem;
 }
+/* Every part of a nesting option has a fixed height, so the cards line up:
+   8 names plus "+N daha" in the list, three lines of hint, two of note. */
+.m2s-nest-hint,
+.m2s-nest-note {
+    font-size: var(--m2s-fs-xs);
+    line-height: 1.45;
+    color: var(--m2s-muted);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+}
+.m2s-nest-hint {
+    height: calc(1.45em * 3);
+    -webkit-line-clamp: 3;
+}
+.m2s-nest-note {
+    height: calc(1.45em * 2);
+    -webkit-line-clamp: 2;
+    margin-bottom: 0.35rem;
+}
 .m2s-table-preview {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: var(--m2s-fs-xs);
     line-height: 1.5;
     color: var(--m2s-text);
-    margin: 0.35rem 0 0.15rem 0;
-    white-space: pre-wrap;
+    margin: 0.35rem 0;
+    height: calc(1.5em * 9);
+    overflow: hidden;
+}
+.m2s-table-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.m2s-table-more {
+    color: var(--m2s-muted);
 }
 [data-testid="stVerticalBlock"][class*="st-key-nest_on_"],
 [data-testid="stVerticalBlock"][class*="st-key-nest_off_"] {

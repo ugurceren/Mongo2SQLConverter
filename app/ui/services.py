@@ -507,6 +507,7 @@ def apply_remembered_collection(widget_key: str, collections: list[str]) -> None
 NESTING_KEY = "nesting_mode"
 SHAPE_KEY = "shape_peek"
 PEEK_SAMPLE = 5000
+PREVIEW_TABLES = 8  # table names a nesting option lists before "+N daha"
 
 
 def nesting_widget_key(collection: str | None) -> str:
@@ -582,29 +583,34 @@ def nesting_choice(
         else "Seçenekler bu koleksiyondaki dizi ve nesne derinliğine göre gelir.",
     ):
 
-        cols = st.columns(2)
+        # One row, and every part of a card at a fixed height, so the options
+        # line up whatever their table lists and texts (see .m2s-nest-* CSS).
+        cols = st.columns(len(allowed))
         picked: str | None = None
         for i, key in enumerate(allowed):
             selected = current == key
             wrap = f"nest_on_{collection}_{key}" if selected else f"nest_off_{collection}_{key}"
             tables, note = preview_tables(key, root, shape)
-            shown = tables[:8]
-            extra = f"\n+{len(tables) - 8} daha" if len(tables) > 8 else ""
-            preview = html.escape("\n".join(shown) + extra)
+            lines = [
+                f'<div class="m2s-table-line" title="{html.escape(name)}">{html.escape(name)}</div>'
+                for name in tables[:PREVIEW_TABLES]
+            ]
+            if len(tables) > PREVIEW_TABLES:
+                lines.append(f'<div class="m2s-table-line m2s-table-more">+{len(tables) - PREVIEW_TABLES} daha</div>')
             n_tables = preview_table_count(key, shape)
-            with cols[i % 2]:
+            with cols[i]:
                 st.markdown(
                     f'<div class="m2s-nest-count">{n_tables} tablo</div>',
                     unsafe_allow_html=True,
                 )
                 with st.container(border=True, key=wrap):
                     st.markdown(f"**{titles[key]}**")
-                    st.caption(hints[key])
                     st.markdown(
-                        f'<div class="m2s-table-preview">{preview}</div>',
+                        f'<div class="m2s-nest-hint">{html.escape(hints[key])}</div>'
+                        f'<div class="m2s-table-preview">{"".join(lines)}</div>'
+                        f'<div class="m2s-nest-note">{html.escape(note)}</div>',
                         unsafe_allow_html=True,
                     )
-                    st.caption(note)
                     if st.button(
                         "Seçildi" if selected else "Bunu kullan",
                         type="primary" if selected else "secondary",
