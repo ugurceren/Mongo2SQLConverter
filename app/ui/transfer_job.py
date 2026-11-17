@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.ui.services import mongo_client, sql_target
-from core.logutil import get_logger
+from core.logutil import get_logger, job_file
 from core.run_job import TransferRequest, execute_transfer, loader_settings
 from core.transfer import TransferStats
 from core.writer import LockBusy
@@ -70,6 +70,11 @@ def _patch(**fields: Any) -> None:
 
 
 def _run(payload: dict[str, Any]) -> None:
+    with job_file("aktarim", payload["options"]["collection"]):
+        _run_job(payload)
+
+
+def _run_job(payload: dict[str, Any]) -> None:
     options: dict[str, Any] = payload["options"]
     collection = options["collection"]
     source = mongo_client(payload["mongo"], long_running=True)

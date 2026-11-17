@@ -34,7 +34,7 @@ from app.ui.services import (
 )
 from core.checkpoint import is_window
 from core.inspect import LARGE_COLLECTION, nesting_labels, render_database_ddl, sql_table_ident
-from core.logutil import log_path_display
+from core.logutil import current_error_file, jobs_dir, log_path_display
 from core.mongo import date_range_filter
 from core.preflight import PROBE_DOCS, format_duration, run_preflight
 from core.rejects import read_lines
@@ -1472,7 +1472,9 @@ def _run_card(settings: Settings, options: dict, selected: dict | None) -> None:
 
             _live()
         st.caption(
-            f"Günlük `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır."
+            f"Günlük `{log_path_display()}` — başlangıç, ilerleme ve bitiş bu dosyaya yazılır. "
+            f"Her işin ayrıca kendi dosyası `{log_path_display(jobs_dir())}` altında; "
+            f"uyarı ve hatalar `{log_path_display(current_error_file())}` dosyasında."
         )
 
 

@@ -22,7 +22,7 @@ from core.inspect import (
     shape_caption,
     sql_table_ident,
 )
-from core.logutil import JobLog, get_logger
+from core.logutil import JobLog, get_logger, job_file
 from core.mongo import MongoClientWrapper
 from core.mssql import (
     AUTH_NEEDS_PASSWORD,
@@ -771,6 +771,14 @@ def profile_many(
     settings: Settings, names: list[str], sample: int, schema: str, nesting: str = "deep"
 ) -> tuple[list[dict], list[str], list[str], int]:
     """Profile several collections, reporting progress. Errors do not stop the run."""
+    label = names[0] if len(names) == 1 else (settings.mongo.get("database") or "veritabani")
+    with job_file("sema-kesfi", label):
+        return _profile_many(settings, names, sample, schema, nesting)
+
+
+def _profile_many(
+    settings: Settings, names: list[str], sample: int, schema: str, nesting: str
+) -> tuple[list[dict], list[str], list[str], int]:
     plans: list[dict] = []
     skipped: list[str] = []
     errors: list[str] = []
@@ -847,6 +855,18 @@ def profile_one(
     schema: str,
     nesting: str = "deep",
     query: dict[str, Any] | None = None,
+) -> dict:
+    with job_file("profil", name):
+        return _profile_one(settings, name, sample, schema, nesting, query)
+
+
+def _profile_one(
+    settings: Settings,
+    name: str,
+    sample: int,
+    schema: str,
+    nesting: str,
+    query: dict[str, Any] | None,
 ) -> dict:
     job = JobLog("profil", collection=name, örnek=sample, sema=schema, nesting=nesting)
     job.start()

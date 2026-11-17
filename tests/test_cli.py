@@ -33,7 +33,12 @@ def load_cli():
 class CliTests(unittest.TestCase):
     def setUp(self):
         self.cli = load_cli()
-        for name, value in (("configure_logging", mock.Mock()), ("get_logger", mock.Mock(return_value=QUIET))):
+        no_job_file = mock.Mock(return_value=contextlib.nullcontext(Path("job.log")))
+        for name, value in (
+            ("configure_logging", mock.Mock()),
+            ("get_logger", mock.Mock(return_value=QUIET)),
+            ("job_file", no_job_file),
+        ):
             patcher = mock.patch.object(self.cli, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)

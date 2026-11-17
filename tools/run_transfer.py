@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.logutil import configure_logging, get_logger  # noqa: E402
+from core.logutil import configure_logging, get_logger, job_file  # noqa: E402
 from core.rejects import read_lines  # noqa: E402
 from core.run_job import run_preflight_job, run_transfer_job  # noqa: E402
 from core.settings import SCHEDULE_MODES, parse_table_renames  # noqa: E402
@@ -114,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
     _utf8_output()
     configure_logging()
     args = build_parser().parse_args(argv)
+    kind = "on-kontrol" if args.preflight_only else "aktarim"
+    with job_file(kind, args.collection):
+        return _run(args)
+
+
+def _run(args: argparse.Namespace) -> int:
     log = get_logger()
     try:
         names = parse_table_renames(args.rename) if args.rename is not None else None

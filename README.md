@@ -59,7 +59,14 @@ ALTER ROLE db_ddladmin   ADD MEMBER [svc_mongo2sql];
 python run.py
 ```
 
-Aktarım, profil ve şema keşfi (DRDL) satırları her gün için ayrı bir dosyaya yazılır: `logs/mongo2sql_2026-09-26.log` gibi (başlangıç, ilerleme, bitiş, hata). Şema keşfi koleksiyon başına belge, alan ve DRDL tablo sayısını; üretilen DRDL'nin tablo, kolon ve boyutunu; arayüzden indirilmesini de yazar. Gece yarısını geçen bir iş ertesi günün dosyasında devam eder; arayüz ve zamanlanmış işler aynı günün dosyasına ekler. Eski günlerin dosyaları silinmez. `logs/` git'e eklenmez.
+Aktarım, profil ve şema keşfi (DRDL) satırları her gün için ayrı bir dosyaya yazılır: `logs/mongo2sql_2026-09-26.log` gibi (başlangıç, ilerleme, bitiş, hata). Şema keşfi koleksiyon başına belge, alan ve DRDL tablo sayısını; üretilen DRDL'nin tablo, kolon ve boyutunu; arayüzden indirilmesini de yazar.
+
+Günlük dosyanın yanında iki dosya daha vardır:
+
+- **İş dosyası:** Her aktarım, ön kontrol, profil ve şema keşfi kendi satırlarını ayrıca `logs/jobs/2026-11-17_164246_aktarim_conversations.log` gibi bir dosyaya yazar. Okuma iş parçacığının satırları ve işin hatası (traceback dahil) da buradadır. Aynı anda çalışan başka bir işin satırları karışmaz. Dosyanın yolu işin ilk satırında, günlük dosyada da yazar.
+- **Hata dosyası:** Uyarı ve hatalar ayrıca `logs/mongo2sql_errors_<tarih>.log` dosyasına gider.
+
+Hiçbir log dosyası otomatik silinmez. Gece yarısını geçen bir iş ertesi günün dosyasında devam eder; arayüz ve zamanlanmış işler aynı günün dosyasına ekler. Eski günlerin dosyaları silinmez. `logs/` git'e eklenmez.
 
 Üst şeritteki ay/güneş düğmesi Streamlit'in kendi koyu/açık temasını seçer (`.streamlit/config.toml` içindeki `[theme.dark]` / `[theme.light]`). Seçim bu tarayıcıda kalır; geçişte sayfa bir kez yenilenir, arka planda süren aktarım etkilenmez. Seçim yapılmamışsa işletim sisteminin teması kullanılır.
 

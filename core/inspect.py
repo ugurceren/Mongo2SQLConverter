@@ -33,7 +33,7 @@ from bson import Binary, Decimal128, Int64, ObjectId, json_util
 from bson.datetime_ms import DatetimeMS
 import yaml
 
-from core.logutil import JobLog, get_logger
+from core.logutil import JobLog, get_logger, job_file
 from core.mongo import MongoClientWrapper
 from core.settings import load_settings
 from core.textutil import safe_console, utf16_len, json_text
@@ -1356,7 +1356,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    name = args.collection or (Path(args.from_file).stem if args.from_file else "koleksiyon")
+    with job_file("sema-kesfi", name):
+        return _main(args)
 
+
+def _main(args: argparse.Namespace) -> int:
     profile = Profile(
         preview_len=args.preview_len,
         distinct_limit=args.distinct_limit,

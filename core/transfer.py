@@ -31,7 +31,7 @@ from core.checkpoint import TABLE as CHECKPOINT_TABLE
 from core.checkpoint import RunPlan, is_window
 from core.convert import Flattener
 from core.inspect import ddl_statements, key_column_type, sql_table_ident
-from core.logutil import JobLog, get_logger
+from core.logutil import JobLog, get_logger, in_job_context
 from core.mongo import MongoClientWrapper, encode_mongo_id, encode_resume_id
 from core.mssql import MssqlConnection
 from core.reader import ChunkedReader, SourceDoc, projection_for
@@ -1020,7 +1020,9 @@ def transfer_collection(
     q: queue.Queue = queue.Queue(maxsize=2)
     try:
         if prefetch:
-            worker = threading.Thread(target=produce, args=(q,), name="mongo2sql-reader", daemon=True)
+            worker = threading.Thread(
+                target=in_job_context(produce), args=(q,), name="mongo2sql-reader", daemon=True
+            )
             worker.start()
             source: Iterator[Any] = iter(q.get, _DONE)
         else:
