@@ -21,23 +21,25 @@ yellowColor = "#d29922"
 redColor = "#f85149"
 
 [theme.light]
-primaryColor = "#0969da"
-backgroundColor = "#f6f8fa"
-secondaryBackgroundColor = "#ffffff"
+# Dimmed: no pure white surfaces. Accents are a step darker than GitHub's so
+# text keeps 4.5:1 on the grey background (5:1 or more on #e9ecef).
+primaryColor = "#0a5cc2"
+backgroundColor = "#e9ecef"
+secondaryBackgroundColor = "#f2f4f6"
 textColor = "#1f2328"
-borderColor = "#d0d7de"
-linkColor = "#0969da"
-greenColor = "#1a7f37"
-yellowColor = "#9a6700"
-redColor = "#cf222e"
+borderColor = "#c3cad2"
+linkColor = "#0a5cc2"
+greenColor = "#176f30"
+yellowColor = "#805600"
+redColor = "#b81d29"
 
 [theme.dark.sidebar]
 backgroundColor = "#0d1117"
 secondaryBackgroundColor = "#161b22"
 
 [theme.light.sidebar]
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f6f8fa"
+backgroundColor = "#eef0f2"
+secondaryBackgroundColor = "#e4e7ea"
 
 [client]
 toolbarMode = "minimal"

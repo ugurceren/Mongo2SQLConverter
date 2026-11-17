@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-gallery",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "tools/ui_gallery.py", "--server.port", "8512", "--server.headless", "true"],
+      "port": 8512
+    }
+  ]
+}

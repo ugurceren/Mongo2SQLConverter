@@ -19,46 +19,46 @@ State = Literal["ok", "warn", "err", "saved", "off"]
 CSS = """
 /* ---------- tokens: light value first, dark second ---------- */
 :root {
-    --m2s-bg: light-dark(#f6f8fa, #0d1117);
-    --m2s-surface: light-dark(rgb(255 255 255 / 0.82), rgb(22 27 34 / 0.78));
-    --m2s-surface-strong: light-dark(rgb(246 248 250 / 0.90), rgb(13 17 23 / 0.88));
+    --m2s-bg: light-dark(#e9ecef, #0d1117);
+    --m2s-surface: light-dark(rgb(242 244 246 / 0.86), rgb(22 27 34 / 0.78));
+    --m2s-surface-strong: light-dark(rgb(233 236 239 / 0.92), rgb(13 17 23 / 0.88));
     --m2s-surface-muted: light-dark(rgb(31 35 40 / 0.04), rgb(240 246 252 / 0.04));
     --m2s-surface-hover: light-dark(rgb(31 35 40 / 0.08), rgb(240 246 252 / 0.09));
     --m2s-line: light-dark(rgb(31 35 40 / 0.14), rgb(148 163 184 / 0.26));
     --m2s-line-strong: light-dark(rgb(31 35 40 / 0.28), rgb(240 246 252 / 0.26));
     --m2s-shadow: light-dark(rgb(31 35 40 / 0.07), rgb(0 0 0 / 0.26));
     --m2s-text: light-dark(#1f2328, #e6edf3);
-    --m2s-muted: light-dark(#57606a, #9aa6b4);
-    --m2s-accent: light-dark(#0969da, #4c8dff);
+    --m2s-muted: light-dark(#525a64, #9aa6b4);
+    --m2s-accent: light-dark(#0a5cc2, #4c8dff);
     --m2s-accent-text: light-dark(#0550ae, #9cc0ff);
-    --m2s-accent-soft: light-dark(rgb(9 105 218 / 0.10), rgb(76 141 255 / 0.14));
-    --m2s-accent-line: light-dark(rgb(9 105 218 / 0.45), rgb(76 141 255 / 0.45));
-    --m2s-focus: light-dark(#0969da, #79a8ff);
+    --m2s-accent-soft: light-dark(rgb(10 92 194 / 0.10), rgb(76 141 255 / 0.14));
+    --m2s-accent-line: light-dark(rgb(10 92 194 / 0.45), rgb(76 141 255 / 0.45));
+    --m2s-focus: light-dark(#0a5cc2, #79a8ff);
     --m2s-on-hue: light-dark(#ffffff, #041018);
 
     /* status colors: used for status only */
-    --m2s-ok: light-dark(#1a7f37, #3fb950);
-    --m2s-ok-ring: light-dark(rgb(26 127 55 / 0.16), rgb(63 185 80 / 0.18));
-    --m2s-warn: light-dark(#9a6700, #d29922);
-    --m2s-warn-ring: light-dark(rgb(154 103 0 / 0.16), rgb(210 153 34 / 0.18));
-    --m2s-err: light-dark(#cf222e, #f85149);
-    --m2s-err-ring: light-dark(rgb(207 34 46 / 0.16), rgb(248 81 73 / 0.18));
-    --m2s-off: light-dark(#8c959f, #6e7681);
+    --m2s-ok: light-dark(#176f30, #3fb950);
+    --m2s-ok-ring: light-dark(rgb(23 111 48 / 0.16), rgb(63 185 80 / 0.18));
+    --m2s-warn: light-dark(#805600, #d29922);
+    --m2s-warn-ring: light-dark(rgb(128 86 0 / 0.16), rgb(210 153 34 / 0.18));
+    --m2s-err: light-dark(#b81d29, #f85149);
+    --m2s-err-ring: light-dark(rgb(184 29 41 / 0.16), rgb(248 81 73 / 0.18));
+    --m2s-off: light-dark(#7a838d, #6e7681);
 
     /* page hues: navigation and wayfinding only */
-    --m2s-connections: light-dark(#0969da, #4c8dff);
+    --m2s-connections: light-dark(#0a5cc2, #4c8dff);
     --m2s-connections-text: light-dark(#0550ae, #9cc0ff);
-    --m2s-connections-soft: light-dark(rgb(9 105 218 / 0.10), rgb(76 141 255 / 0.14));
-    --m2s-discovery: light-dark(#0e7490, #22d3ee);
-    --m2s-discovery-text: light-dark(#0e7490, #67e8f9);
-    --m2s-discovery-soft: light-dark(rgb(14 116 144 / 0.10), rgb(34 211 238 / 0.12));
+    --m2s-connections-soft: light-dark(rgb(10 92 194 / 0.10), rgb(76 141 255 / 0.14));
+    --m2s-discovery: light-dark(#0b6a85, #22d3ee);
+    --m2s-discovery-text: light-dark(#0b6a85, #67e8f9);
+    --m2s-discovery-soft: light-dark(rgb(11 106 133 / 0.10), rgb(34 211 238 / 0.12));
     --m2s-transfer: light-dark(#7c3aed, #a78bfa);
     --m2s-transfer-text: light-dark(#6d28d9, #c4b5fd);
     --m2s-transfer-soft: light-dark(rgb(124 58 237 / 0.10), rgb(167 139 250 / 0.14));
 
     --m2s-app-bg:
         radial-gradient(1100px 520px at 8% -8%,
-            light-dark(rgb(9 105 218 / 0.08), rgb(76 141 255 / 0.16)), transparent 58%),
+            light-dark(rgb(10 92 194 / 0.06), rgb(76 141 255 / 0.16)), transparent 58%),
         var(--m2s-bg);
 
     /* type scale */
@@ -312,7 +312,7 @@ section[data-testid="stMain"] .block-container {
 }
 .m2s-theme-btn:hover { color: var(--m2s-text); }
 .m2s-theme-btn[aria-pressed="true"] {
-    background: light-dark(#ffffff, #2b303b);
+    background: light-dark(#f2f4f6, #2b303b);
     color: var(--m2s-text);
     box-shadow: 0 1px 3px var(--m2s-shadow);
 }
@@ -906,7 +906,7 @@ section[data-testid="stSidebar"] > div,
 .st-key-sql_test button p { color: inherit !important; }
 .st-key-mongo_test button:hover,
 .st-key-sql_test button:hover {
-    background: light-dark(rgb(9 105 218 / 0.16), rgb(76 141 255 / 0.24)) !important;
+    background: light-dark(rgb(10 92 194 / 0.16), rgb(76 141 255 / 0.24)) !important;
     border-color: var(--m2s-accent) !important;
 }
 [data-testid="stMetricLabel"] p {
@@ -1001,8 +1001,8 @@ section[data-testid="stSidebar"] > div,
 }
 @media (prefers-reduced-transparency: reduce) {
     :root {
-        --m2s-surface: light-dark(#ffffff, #161b22);
-        --m2s-surface-strong: light-dark(#f6f8fa, #0d1117);
+        --m2s-surface: light-dark(#f2f4f6, #161b22);
+        --m2s-surface-strong: light-dark(#e9ecef, #0d1117);
         --m2s-app-bg: var(--m2s-bg);
     }
     .m2s-topbar {
