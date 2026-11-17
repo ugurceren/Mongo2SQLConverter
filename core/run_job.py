@@ -21,12 +21,14 @@ from core.preflight import Report, run_preflight
 from core.rejects import RejectLog
 from core.retry import describe
 from core.settings import (
+    BATCH_AUTO,
     DEFAULT_BATCH,
     _as_schedule_mode,
     load_settings,
     load_sync_watermark,
     load_transfer_prefs,
     save_sync_watermark,
+    suggest_batch,
 )
 from core.transfer import (
     TransferStats,
@@ -65,7 +67,7 @@ class TransferRequest:
     mongo_database: str
     mode: str = "auto"  # requested: full | incremental | auto
     date_query: dict[str, Any] | None = None
-    batch: int = DEFAULT_BATCH
+    batch: int = DEFAULT_BATCH  # BATCH_AUTO: from the run's document count
     recreate: bool = False
     clear_first: bool = False
     restart: bool = False
@@ -320,6 +322,9 @@ def execute_transfer(
 
         say("Belge sayısı tahmin ediliyor...")
         expected = _expected_count(source, request.collection, run, query)
+        batch_docs = request.batch or suggest_batch(expected)
+        if not request.batch:
+            log_extra = {**(log_extra or {}), "parti_otomatik": True}
         rejects = RejectLog(request.collection, root, run_id, log=log)
         say("Belgeler yazılıyor...")
         stats = transfer_collection(
@@ -330,7 +335,7 @@ def execute_transfer(
             run=run,
             rejects=rejects,
             query=query,
-            batch_docs=request.batch,
+            batch_docs=batch_docs,
             batch_rows=request.commit_rows,
             batch_bytes=request.commit_mb * 1024 * 1024,
             expected_count=expected,
@@ -397,6 +402,13 @@ class JobInputs:
         return _sql_target(self.mssql_cfg, self.mssql_cfg.get("password"), self.schema)
 
 
+def _write_batch(batch: int | None, prefs: dict[str, Any]) -> int:
+    """`--batch` wins; else the saved number, or BATCH_AUTO when the saved choice is automatic."""
+    if batch is not None:
+        return int(batch)
+    return BATCH_AUTO if prefs.get("batch_auto") else int(prefs["batch"])
+
+
 def _job_inputs(
     collection: str,
     *,
@@ -441,7 +453,7 @@ def _job_inputs(
         table=sql_table_ident(prefs["table"] or name),
         pinned=pinned,
         requested="full" if restart else requested,
-        write_batch=int(batch) if batch is not None else int(prefs["batch"]),
+        write_batch=_write_batch(batch, prefs),
         profile_sample=int(sample) if sample is not None else int(prefs["sample"]),
         nesting=prefs["nesting"] if prefs["nesting"] in allowed_nesting else "hybrid",
         prefs=prefs,
@@ -473,7 +485,7 @@ def _profile_plan(source: MongoClientWrapper, job: JobInputs, *, full_profile: b
         job.requested,
         job.schema,
         job.table,
-        job.write_batch,
+        job.write_batch or "otomatik",
         job.profile_sample,
         job.pinned,
     )

@@ -56,10 +56,16 @@ class PageStateTests(unittest.TestCase):
         batch = at.number_input(key="tr_batch_conversations")
         self.assertEqual((sample.value, sample.step), (5000, 1000))
         self.assertEqual((batch.value, batch.step), (1000, 500))
+        # Automatic by default: the number is shown, the transfer picks it.
+        self.assertTrue(at.toggle(key="tr_batch_auto_conversations").value)
+        self.assertTrue(batch.disabled)
+        self.assertTrue(at.session_state["out"]["batch_auto"])
 
     def test_choices_survive_another_page(self):
         at = self.open()
         at.number_input(key="tr_sample_conversations").set_value(20000)
+        at.toggle(key="tr_batch_auto_conversations").set_value(False)
+        at.run()
         at.number_input(key="tr_batch_conversations").set_value(3000)
         at.checkbox(key="tr_null_conversations").uncheck()
         at.radio(key="tr_sync_conversations").set_value("Artımlı")
@@ -71,6 +77,8 @@ class PageStateTests(unittest.TestCase):
         self.assertEqual((out["sample"], out["batch"], out["allow_null"], out["mode"]), (20000, 3000, False, "incremental"))
         saved = self.saved()
         self.assertEqual((saved["sample"], saved["batch"], saved["allow_null"]), (20000, 3000, False))
+        self.assertFalse(saved["batch_auto"])
+        self.assertFalse(at.toggle(key="tr_batch_auto_conversations").value)
         # Destructive options start unticked again, on purpose.
         self.assertFalse(at.checkbox(key="tr_recreate_conversations").value)
 

@@ -12,6 +12,7 @@ from unittest import mock
 import pyodbc
 
 from core import checkpoint as cp
+from core import run_job
 from core.checkpoint import MISSING
 from core.rejects import RejectLog
 from core.run_job import TransferRequest, execute_transfer
@@ -146,7 +147,9 @@ class ExecuteTransferTests(unittest.TestCase):
             result = execute_transfer(
                 self.mongo,
                 lambda: None,
-                TransferRequest(collection="conversations", plan=PLAN, mongo_database="app", batch=100, **request),
+                TransferRequest(
+                    collection="conversations", plan=PLAN, mongo_database="app", **{"batch": 100, **request}
+                ),
                 should_stop=should_stop,
             )
         self.assertTrue(ops.closed)
@@ -168,6 +171,22 @@ class ExecuteTransferTests(unittest.TestCase):
         self.assertEqual(first.stats.written + second.stats.written, len(DOCS))
         self.assertIsNone(second.stats.rejects_path)  # nothing was rejected: no file to point at
         self.saved.assert_called()
+
+    def test_automatic_batch_follows_the_runs_document_count(self):
+        real = run_job.transfer_collection
+        seen = []
+
+        def spy(*args, **kwargs):
+            seen.append((kwargs["batch_docs"], (kwargs.get("log_extra") or {}).get("parti_otomatik")))
+            return real(*args, **kwargs)
+
+        with mock.patch("core.run_job.transfer_collection", side_effect=spy), mock.patch(
+            "core.run_job._expected_count", return_value=2_740_547
+        ):
+            self.execute(batch=0)
+            self.execute(mode="full", clear_first=True, batch=300)
+        self.assertEqual(seen, [(10_000, True), (300, None)])
+        self.assertEqual(self.server.checkpoint["status"], "completed")
 
     def test_clearing_forgets_the_checkpoint_first(self):
         self.execute()

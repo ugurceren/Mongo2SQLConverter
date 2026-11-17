@@ -118,6 +118,28 @@ TIMEZONE_MODES = ("local", "utc")
 SCHEDULE_MODES = ("auto", "full", "incremental")
 DEFAULT_SAMPLE = 5000  # documents profiled for the plan; 0 = the whole collection
 DEFAULT_BATCH = 1000  # documents per write batch
+BATCH_AUTO = 0  # a request's batch: pick it from the run's document count
+
+# (documents up to, batch). Each batch is one transaction plus a checkpoint
+# update, so big loads write fewer, larger ones; small runs keep 1000 for
+# frequent progress. Memory stays bounded either way: a batch also closes at
+# `loader.commit_rows` SQL rows or `loader.commit_mb` MiB, whichever is first.
+BATCH_STEPS = (
+    (100_000, 1_000),
+    (1_000_000, 5_000),
+    (10_000_000, 10_000),
+)
+BATCH_LARGEST = 20_000
+
+
+def suggest_batch(documents: int | None) -> int:
+    """Write batch for a run of this many documents (unknown: the default)."""
+    if documents is None:
+        return DEFAULT_BATCH
+    for limit, batch in BATCH_STEPS:
+        if documents < limit:
+            return batch
+    return BATCH_LARGEST
 
 
 def _as_date(value: Any) -> date | None:
@@ -194,6 +216,7 @@ def default_transfer_prefs() -> dict[str, Any]:
         "schema": "",
         "schedule_mode": "auto",
         "batch": DEFAULT_BATCH,
+        "batch_auto": True,
         "sample": DEFAULT_SAMPLE,
         "allow_null": True,
         "table_names": {},
@@ -238,6 +261,11 @@ def load_transfer_prefs(collection: str) -> dict[str, Any]:
     prefs["schema"] = str(stored.get("schema") or "").strip()
     prefs["schedule_mode"] = _as_schedule_mode(stored.get("schedule_mode"))
     prefs["batch"] = _as_int(stored.get("batch"), DEFAULT_BATCH, 100)
+    # Saved before the automatic batch existed: 1000 was the untouched
+    # default, so it turns automatic; any other number was a choice.
+    prefs["batch_auto"] = (
+        bool(stored["batch_auto"]) if "batch_auto" in stored else prefs["batch"] == DEFAULT_BATCH
+    )
     prefs["sample"] = _as_int(stored.get("sample"), DEFAULT_SAMPLE, 0)
     if "allow_null" in stored:
         prefs["allow_null"] = bool(stored.get("allow_null"))
@@ -288,6 +316,7 @@ def save_transfer_prefs(collection: str, prefs: dict[str, Any]) -> Path:
         "table": str(prefs.get("table") or "").strip(),
         "schedule_mode": _as_schedule_mode(prefs.get("schedule_mode")),
         "batch": _as_int(prefs.get("batch"), defaults["batch"], 100),
+        "batch_auto": bool(prefs.get("batch_auto", defaults["batch_auto"])),
         "sample": _as_int(prefs.get("sample"), defaults["sample"], 0),
         "allow_null": bool(prefs["allow_null"]) if "allow_null" in prefs else True,
         "table_names": _as_name_map(prefs.get("table_names")),

@@ -46,6 +46,7 @@ from core.settings import (
     load_sync_watermark,
     load_transfer_prefs,
     save_transfer_prefs,
+    suggest_batch,
 )
 from core.transfer import (
     apply_column_selection,
@@ -79,6 +80,10 @@ def _saved_batch(prefs: dict) -> int:
     return int(prefs.get("batch") or DEFAULT_BATCH)
 
 
+def _saved_batch_auto(prefs: dict) -> bool:
+    return bool(prefs.get("batch_auto", True))
+
+
 def _restore_widget(key: str, value: Any) -> None:
     """
     Put a value back into a widget key Streamlit dropped.
@@ -98,6 +103,7 @@ def _defaults(settings: Settings) -> dict:
         "table": "",
         "sample": DEFAULT_SAMPLE,
         "batch": DEFAULT_BATCH,
+        "batch_auto": True,
         "recreate": False,
         "clear_first": False,
         "allow_null": True,
@@ -162,6 +168,7 @@ def _apply_prefs_widgets(prefs: dict, collection: str) -> None:
     )
     st.session_state[f"tr_sample_{collection}"] = _saved_sample(prefs)
     st.session_state[f"tr_batch_{collection}"] = _saved_batch(prefs)
+    st.session_state[f"tr_batch_auto_{collection}"] = _saved_batch_auto(prefs)
     st.session_state[f"tr_null_{collection}"] = bool(prefs.get("allow_null", True))
 
 
@@ -173,6 +180,7 @@ def _job_prefs(options: dict) -> dict:
         "table": options.get("table") or "",
         "schedule_mode": options.get("schedule_mode") or "auto",
         "batch": int(options.get("batch") or DEFAULT_BATCH),
+        "batch_auto": bool(options.get("batch_auto", True)),
         "sample": int(options["sample"]) if options.get("sample") is not None else DEFAULT_SAMPLE,
         "allow_null": bool(options.get("allow_null", True)),
         "table_names": dict(options.get("table_names") or {}),
@@ -800,6 +808,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         # Saved values, back in place after a visit to another page (see _restore_widget).
         _restore_widget(f"tr_sample_{collection}", _saved_sample(prefs))
         _restore_widget(f"tr_batch_{collection}", _saved_batch(prefs))
+        _restore_widget(f"tr_batch_auto_{collection}", _saved_batch_auto(prefs))
         _restore_widget(f"tr_null_{collection}", bool(prefs.get("allow_null", True)))
         row2 = st.columns([1.2, 1.2, 2.6], vertical_alignment="bottom")
         with row2[0]:
@@ -814,14 +823,30 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
                 ),
             )
         with row2[1]:
+            batch_auto = st.toggle(
+                "Belge sayısına göre",
+                key=f"tr_batch_auto_{collection}",
+                help=(
+                    "Açıkken yazma partisi koleksiyonun belge sayısından seçilir ve her "
+                    "aktarımda yenilenir: 100 binin altı 1.000, 1 milyonun altı 5.000, "
+                    "10 milyonun altı 10.000, üstü 20.000. Tarih aralığı ya da artımlı "
+                    "çalışmada aktarım başlarken o çalışmanın belge sayısına göre seçilir."
+                ),
+            )
+            suggested = suggest_batch(collection_count(settings, collection))
+            if batch_auto:
+                # Shown, not editable: the transfer picks the batch itself.
+                st.session_state[f"tr_batch_{collection}"] = suggested
             batch = st.number_input(
                 "Yazma partisi",
                 min_value=100,
                 step=BATCH_STEP,
                 key=f"tr_batch_{collection}",
+                disabled=batch_auto,
                 help=(
-                    f"SQL'e bir seferde kaç belgelik paket yazılsın. {DEFAULT_BATCH} önerilir. "
-                    "Hızı ve belleği etkiler; aktarılacak belge sayısını değiştirmez."
+                    "SQL'e bir seferde kaç belgelik paket yazılsın. Büyük parti daha az "
+                    "transaction demek; aktarılacak belge sayısını değiştirmez. "
+                    f"Bu koleksiyon için önerilen {format_int(suggested)}."
                 ),
             )
         with row2[2]:
@@ -847,6 +872,7 @@ def _target_card(settings: Settings, collections: list[str]) -> dict:
         {
             "sample": int(sample),
             "batch": int(batch),
+            "batch_auto": bool(batch_auto),
             "recreate": False if incremental else recreate,
             "clear_first": False if incremental else clear_first,
             "allow_null": allow_null,
@@ -895,6 +921,7 @@ def _run_signature(options: dict) -> str:
             options.get("nesting"),
             options.get("sample"),
             options.get("batch"),
+            options.get("batch_auto"),
             options.get("mode"),
             options.get("recreate"),
             options.get("clear_first"),

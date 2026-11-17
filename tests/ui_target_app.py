@@ -47,7 +47,7 @@ if st.session_state.get("page", "transfer") == "transfer":
         page._remember_prefs(COLLECTION, options)
     st.session_state["out"] = {
         key: options.get(key)
-        for key in ("collection", "sample", "batch", "allow_null", "mode", "date_filter")
+        for key in ("collection", "sample", "batch", "batch_auto", "allow_null", "mode", "date_filter")
     }
 elif st.session_state.get("page") == "discovery":
     from app.ui import discovery

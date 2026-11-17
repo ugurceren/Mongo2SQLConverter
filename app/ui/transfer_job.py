@@ -85,7 +85,8 @@ def _run_job(payload: dict[str, Any]) -> None:
         mongo_database=payload["mongo"].get("database") or "",
         mode=options["mode"],
         date_query=payload["date_query"],
-        batch=int(options["batch"]),
+        # 0 (BATCH_AUTO): the transfer picks the batch from its own document count.
+        batch=0 if options.get("batch_auto") else int(options["batch"]),
         recreate=bool(options.get("recreate")),
         clear_first=bool(options.get("clear_first")),
         restart=bool(options.get("restart")),

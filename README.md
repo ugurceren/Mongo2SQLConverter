@@ -238,6 +238,21 @@ Aşama hızlarından toplam süre tahmin edilir. İş başladıktan sonra günü
 | `commit_rows`, `commit_mb` | 20000, 16 | Yazma partisi (belge sayısı), bu satır sayısı ya da bu boyut, hangisi önce dolarsa commit edilir. |
 | `prefetch` | `true` | SQL yazarken sonraki partiyi ayrı bir iş parçacığında okur ve düzleştirir. |
 
+**Yazma partisi.** SQL aktarımı sayfasındaki **Belge sayısına göre** anahtarı açıkken (yeni koleksiyonlarda varsayılan) parti, her aktarım başlarken o çalışmanın belge sayısından seçilir:
+
+| Belge | Parti |
+|-------|-------|
+| 100 binin altı | 1.000 |
+| 1 milyonun altı | 5.000 |
+| 10 milyonun altı | 10.000 |
+| 10 milyon ve üstü | 20.000 |
+
+- Sayı, tarih aralığı varsa aralıktaki belgeler; artımlı çalışmada yeni belgeler; yarım kalan yüklemede kalan belgelerdir. Bu yüzden aynı koleksiyonun ilk yüklemesi büyük, sonraki artımlı çalışmaları küçük partiyle yazılabilir. Sayı hesaplanamazsa 1.000 kullanılır.
+- Her parti bir transaction ve bir kontrol noktası güncellemesidir; büyük yüklemede daha az parti daha az ek yük demektir. Bellek yine sınırlıdır: parti `commit_rows` satıra ya da `commit_mb` MB'a ulaşınca da kapanır.
+- Anahtar kapatılırsa kutudaki sayı kullanılır. CLI'da `--batch N` her zaman önceliklidir.
+- Günlükteki `parti_otomatik=evet` partinin otomatik seçildiğini, `parti=` seçilen değeri gösterir.
+- Önceki sürümlerde kaydedilmiş 1000 (eski varsayılan) otomatiğe geçer; başka bir sayı kaydedilmişse o korunur.
+
 **Ağ ve hız.** Veri Mongo'dan işi çalıştıran makineye, oradan SQL Server'a gider. Bu yüzden hızı çoğu zaman o makinenin sunuculara bağlantısı belirler: VPN, Wi-Fi ya da başka bir ofis üzerinden saniyede birkaç yüz belge, aynı veri merkezinde ise binlerce belge beklenir. Büyük işleri sunuculara yakın bir makinede **Zamanla** komutuyla çalıştırın.
 
 - Mongo trafiği varsayılan olarak sıkıştırılır. zlib her zaman kullanılabilir; zstd, pymongo bu Python'da kullanabiliyorsa önce denenir (Python 3.14 ile pymongo 4.17'de ek paket gerekmez). URI'de `compressors=` yazarsanız o kullanılır. Sunucu sıkıştırmayı desteklemiyorsa bağlantı sıkıştırmasız devam eder.
