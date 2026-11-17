@@ -134,6 +134,13 @@ python tools/infer_schema.py --collection conversations --sample 5000 --out-ddl 
 python tools/infer_schema.py --from-file export.json --collection mycol --out-drdl out.drdl
 ```
 
+DRDL, BI Connector'ın `mongodrdl` aracının biçimindedir ve kırılım seçiminden, tablo adlarından bağımsızdır:
+
+- Nesneler noktalı kolonlara açılır (`tracker.slots.name`). Her dizi kendi tablosu olur: `conversations_tracker_events`, her dizi seviyesi için bir `$unwind` ve bir `<yol>_idx` kolonu.
+- Her tabloda `_id` ve `<koleksiyon>_filter` (`mongo.Filter`) kolonu bulunur.
+- Bazı belgelerde nesne, bazılarında skaler olan bir alan `$addFields` ile ikiye ayrılır: skaler değer `x`, nesnenin anahtarları `x_DOT_<anahtar>` olur (`SqlName` noktalıdır).
+- Bazen null ya da dizi dışı bir değer alan diziler `$match: {$ne: []}` ve `preserveNullAndEmptyArrays: true` ile açılır.
+
 ## Tablo adlari
 
 Tablo adlari **PascalCase** uretilir: `hybrid_conversations` koleksiyonu `HybridConversations` tablosu olur. Alt tablolar kok addan ayirici kullanmadan turer, yani `conversations` icindeki `messages` dizisi `ConversationsMessages` olur.

@@ -222,11 +222,13 @@ def render(settings: Settings) -> None:
         if scope == "collection" and "plan" in st.session_state:
             named = _named_plan(settings, st.session_state["plan"], name)
             ddl = render_database_ddl([named])
-            database = settings.mongo.get("database") or "database"
-            drdl = render_database_drdl([named], database)
+            # mongodrdl format does not use the SQL table names, so the DRDL
+            # rendered at profile time stays valid after a rename.
+            drdl = st.session_state["drdl"]
             st.caption(
                 "Tablo adlarını **SQL aktarımı** sayfasındaki **Tablo adları** kartından "
-                "değiştirip kaydedin; bu çıktı kaydedilen adları kullanır."
+                "değiştirip kaydedin; DDL kaydedilen adları kullanır. DRDL, mongodrdl "
+                "biçiminde koleksiyon ve alan yollarından adlandırılır."
             )
             ddl_tab, drdl_tab, plan_tab = st.tabs(["MSSQL DDL", "DRDL", "Plan (JSON)"])
             with ddl_tab:
@@ -246,7 +248,10 @@ def render(settings: Settings) -> None:
                 )
                 st.code(drdl, language="yaml")
             with plan_tab:
-                st.json(named, expanded=False)
+                st.json(
+                    {k: v for k, v in named.items() if k != "drdl_tables"},
+                    expanded=False,
+                )
         else:
             st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")
             st.code(st.session_state["drdl"], language="yaml")

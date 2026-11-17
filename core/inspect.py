@@ -31,6 +31,7 @@ from typing import Any, Iterator
 
 from bson import Binary, Decimal128, Int64, ObjectId, json_util
 from bson.datetime_ms import DatetimeMS
+import yaml
 
 from core.mongo import MongoClientWrapper
 from core.settings import load_settings
@@ -399,22 +400,33 @@ def sql_type_for(
     return nvarchar_width(max(stat.max_utf16, 64), headroom), [f"bilinmeyen tip: {kind}"]
 
 
+# Profile type name -> (DRDL MongoType, DRDL SqlType), as mongodrdl writes them.
+# int64 / decimal / binary do not occur in the reference export; their spelling
+# follows BI Connector's documented type names.
 DRDL_TYPES = {
-    "NVARCHAR": "varchar",
-    "CHAR": "varchar",
-    "BIT": "boolean",
-    "INT": "int",
-    "BIGINT": "int64",
-    "FLOAT": "float64",
-    "DECIMAL": "decimal128",
-    "DATETIME2": "date",
-    "VARBINARY": "bindata",
+    "string": ("string", "varchar"),
+    "int": ("int", "int"),
+    "int64": ("int64", "int"),
+    "double": ("float64", "float"),
+    "decimal": ("bson.Decimal128", "decimal"),
+    "bool": ("bool", "boolean"),
+    "date": ("date", "timestamp"),
+    "objectId": ("bson.ObjectId", "objectid"),
 }
+DRDL_STRING = ("string", "varchar")
 
 
-def drdl_type(sql: str) -> str:
-    base = sql.split("(")[0].strip().upper()
-    return DRDL_TYPES.get(base, "varchar")
+def drdl_type(types: dict[str, int]) -> tuple[str, str]:
+    """One DRDL type for a field: numbers widen, other mixes take the most common."""
+    scalar = {name: n for name, n in types.items() if name not in {"null", "object", "array"}}
+    if not scalar:
+        return DRDL_STRING
+    if set(scalar) <= {"int", "int64", "double", "decimal"} and len(scalar) > 1:
+        for wide in ("decimal", "double", "int64"):
+            if wide in scalar:
+                return DRDL_TYPES[wide]
+    dominant = max(scalar.items(), key=lambda kv: kv[1])[0]
+    return DRDL_TYPES.get(dominant, DRDL_STRING)
 
 
 NESTING_DEEP = "deep"
@@ -987,78 +999,171 @@ def render_ddl(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _drdl_tables(plan: dict[str, Any]) -> list[str]:
-    collection = plan["collection"]
-    lines: list[str] = []
+DRDL_POLY = "_DOT_"
 
-    def emit_columns(columns: list[dict[str, Any]], indent: str) -> None:
-        lines.append(f"{indent}columns:")
-        for column in columns:
-            mongo_path = column["path"].replace("[]", "")
-            lines.append(f"{indent}- Name: {mongo_path}")
-            lines.append(f"{indent}  MongoType: {_types_text(column['types']) or 'string'}")
-            lines.append(f"{indent}  SqlName: {column['name']}")
-            lines.append(f"{indent}  SqlType: {drdl_type(column['sql_type'])}")
 
-    lines.append(f"  - table: {plan['root']['table']}")
-    lines.append(f"    collection: {collection}")
-    lines.append("    pipeline: []")
-    emit_columns(plan["root"]["columns"], "    ")
+def drdl_tables(profile: Profile, collection: str) -> list[dict[str, Any]]:
+    """
+    mongodrdl's relational view of a collection, as BI Connector reads it.
 
-    for child in plan["children"]:
-        lines.append(f"  - table: {child['table']}")
-        lines.append(f"    collection: {collection}")
-        if child["kind"] == "map":
-            lines.append("    pipeline:")
-            lines.append(f"    - $addFields:")
-            lines.append(f"        _kv: {{$objectToArray: ${child['source']}}}")
-            lines.append("    - $unwind:")
-            lines.append("        path: $_kv")
-            columns = [
-                {"path": "_id", "types": {"string": 1}, "name": child["parent_key"], "sql_type": "NVARCHAR(450)"},
-                {"path": "_kv.k", "types": {"string": 1}, "name": child["key_column"]["name"], "sql_type": child["key_column"]["sql_type"]},
-                {"path": "_kv.v", "types": child["value_types"], "name": child["value_column"]["name"], "sql_type": child["value_column"]["sql_type"]},
-            ]
-            emit_columns(columns, "    ")
-            continue
+    Independent of the SQL plan: the nesting choice, map detection and SQL
+    table names do not apply. Objects flatten to dotted columns and every
+    array becomes a table unwound from the document, one `$unwind` per array
+    level. A field that is an object in some documents and a scalar in others
+    is split by `$addFields` into the scalar (`x`) and one `x_DOT_<key>` per
+    key; columns and unwinds below it use that alias.
+    """
+    by_parent: dict[str, list[FieldStats]] = {}
+    for stat in profile.stats.values():
+        if stat.parent is not None:
+            by_parent.setdefault(stat.parent, []).append(stat)
 
-        # One stage per array level: MongoDB cannot $unwind a path that traverses
-        # an array it has not unwound yet, so nested arrays need a stage each.
-        lines.append("    pipeline:")
-        segments = child["source"].split("[]")
-        for level, idx_name in enumerate(child["idx_columns"]):
-            lines.append("    - $unwind:")
-            lines.append(f"        path: ${''.join(segments[: level + 1])}")
-            lines.append(f"        includeArrayIndex: {idx_name}")
-        columns = [
-            {"path": "_id", "types": {"string": 1}, "name": child["parent_key"], "sql_type": "NVARCHAR(450)"},
-            *child["columns"],
+    def children(path: str) -> list[FieldStats]:
+        return sorted(by_parent.get(path + "." if path else "", []), key=lambda s: s.path)
+
+    def kind(stat: FieldStats) -> str:
+        types = stat.concrete_types
+        element = profile.stats.get(stat.path + "[]")
+        if "array" in types and element is not None and element.concrete_types:
+            return "array"
+        if "object" in types and by_parent.get(stat.path + "."):
+            return "poly" if set(types) - {"object", "array"} else "object"
+        return "leaf"
+
+    def sql_name(name: str) -> str:
+        return name.replace(DRDL_POLY, ".")
+
+    def column(name: str, types: dict[str, int]) -> dict[str, str]:
+        mongo_type, sql_type = drdl_type(types)
+        return {"Name": name, "MongoType": mongo_type, "SqlName": sql_name(name), "SqlType": sql_type}
+
+    def cond(name: str, when_object: str | None, otherwise: str | None) -> dict[str, Any]:
+        return {"$cond": [{"$eq": [{"$type": "$" + name}, "object"]}, when_object, otherwise]}
+
+    def poly_stage(stat: FieldStats, name: str) -> dict[str, Any]:
+        fields = {name: cond(name, None, "$" + name)}
+        for child in children(stat.path):
+            key = child.path[len(stat.path) + 1 :]
+            fields[f"{name}{DRDL_POLY}{key}"] = cond(name, f"${name}.{key}", None)
+        return {"$addFields": dict(sorted(fields.items()))}
+
+    def visit(path: str, name: str, poly: bool, columns: list, stages: list, arrays: list) -> None:
+        """Columns of one container; arrays below it are collected for their own tables."""
+        for stat in children(path):
+            key = stat.path[len(path) + 1 :] if path else stat.path
+            if not path and key == "_id":
+                continue
+            child_name = f"{name}{DRDL_POLY if poly else '.'}{key}" if name else key
+            # mongodrdl types the keys of a split object as string: their
+            # values pass through `$cond`, which it does not look into.
+            types = {} if poly else stat.concrete_types
+            shape = kind(stat)
+            if shape == "array":
+                arrays.append((stat, child_name))
+            elif shape == "poly":
+                stages.append(poly_stage(stat, child_name))
+                columns.append(column(child_name, types))
+                visit(stat.path, child_name, True, columns, stages, arrays)
+            elif shape == "object":
+                visit(stat.path, child_name, False, columns, stages, arrays)
+            else:
+                columns.append(column(child_name, types))
+
+    id_stat = profile.stats.get("_id")
+    id_types = id_stat.concrete_types if id_stat else {}
+    filter_name = f"{collection}_filter"
+    tables: list[dict[str, Any]] = []
+
+    def emit(table: str, pipeline: list, columns: list, arrays: list, idx: list) -> None:
+        rest = [
+            {"Name": filter_name, "MongoType": "mongo.Filter", "SqlName": filter_name, "SqlType": "varchar"},
+            *columns,
+            *idx,
         ]
-        emit_columns(columns, "    ")
+        tables.append(
+            {
+                "table": table,
+                "collection": collection,
+                "pipeline": pipeline,
+                "columns": [column("_id", id_types), *sorted(rest, key=lambda c: c["SqlName"].lower())],
+            }
+        )
+        for stat, name in arrays:
+            element = profile.stats[stat.path + "[]"]
+            shape = kind(element)
+            index = sql_name(name) + "_idx"
+            # Sometimes null or not an array (also when a split parent was a
+            # scalar), or elements of mixed shape: keep those documents and
+            # only drop empty arrays, as mongodrdl does.
+            loose = (
+                bool(set(stat.types) - {"array"}) or DRDL_POLY in name or shape == "poly"
+            )
+            stages = list(pipeline)
+            if loose:
+                stages.append({"$match": {name: {"$ne": []}}})
+            stages.append(
+                {
+                    "$unwind": {
+                        "includeArrayIndex": index,
+                        "path": "$" + name,
+                        "preserveNullAndEmptyArrays": loose,
+                    }
+                }
+            )
+            child_columns: list = []
+            child_arrays: list = []
+            if shape == "poly":
+                stages.append(poly_stage(element, name))
+                child_columns.append(column(name, element.concrete_types))
+                visit(element.path, name, True, child_columns, stages, child_arrays)
+            elif shape == "object":
+                visit(element.path, name, False, child_columns, stages, child_arrays)
+            else:
+                child_columns.append(column(name, element.concrete_types))
+            emit(
+                f"{collection}_{sql_name(name).replace('.', '_')}",
+                stages,
+                child_columns,
+                child_arrays,
+                [*idx, column(index, {"int": 1})],
+            )
 
-    return lines
+    root_columns: list = []
+    root_stages: list = []
+    root_arrays: list = []
+    visit("", "", False, root_columns, root_stages, root_arrays)
+    emit(collection, root_stages, root_columns, root_arrays, [])
+    return sorted(tables, key=lambda t: t["table"].lower())
+
+
+class _DrdlDumper(yaml.SafeDumper):
+    # Child tables share their parent's pipeline stages; spell them out
+    # instead of writing YAML anchors, which BI tooling does not expect.
+    def ignore_aliases(self, data: Any) -> bool:
+        return True
 
 
 def render_database_drdl(plans: list[dict[str, Any]], database: str) -> str:
-    """One DRDL schema with tables from every collection plan."""
-    lines = [
-        "# mongodrdl uyumlu sekilde uretildi; BI Connector 2026-09 sonrasi EOL.",
-        "schema:",
-        f"- db: {database}",
-        "  tables:",
-    ]
+    """One mongodrdl-format schema with tables from every collection plan."""
+    tables: list[dict[str, Any]] = []
     for plan in plans:
-        lines.extend(_drdl_tables(plan))
-    return "\n".join(lines) + "\n"
+        if "drdl_tables" not in plan:
+            raise ValueError(
+                f"{plan.get('collection')}: plan DRDL tablolarini tasimiyor; semayi yeniden cikarin."
+            )
+        tables.extend(plan["drdl_tables"])
+    return yaml.dump(
+        {"schema": [{"db": database, "tables": tables}]},
+        Dumper=_DrdlDumper,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+        width=1 << 20,
+    )
 
 
 def render_drdl(plan: dict[str, Any], database: str) -> str:
-    """
-    DRDL-shaped YAML, for familiarity and for feeding BI tooling.
-
-    Emitted by hand rather than via a yaml dependency for the pipeline blocks,
-    which need MongoDB's `$unwind` spelling preserved exactly.
-    """
+    """DRDL for one collection, in mongodrdl's format (see `drdl_tables`)."""
     return render_database_drdl([plan], database)
 
 
@@ -1160,6 +1265,7 @@ def profile_collection(
         profile.add_document(doc)
     maps = detect_map_prefixes(profile, map_min_keys, map_max_fill)
     plan = build_plan(profile, collection, schema, maps, headroom, nesting=nesting)
+    plan["drdl_tables"] = drdl_tables(profile, collection)
     plan["profile_sample"] = sample
     if warning:
         plan["profile_warning"] = warning
@@ -1297,6 +1403,7 @@ def main() -> int:
         args.table_prefix,
         nesting=args.nesting,
     )
+    plan["drdl_tables"] = drdl_tables(profile, collection)
 
     print_report(plan, profile, args.sample or None)
 
