@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 import yaml
 from bson import ObjectId
 
-from core.inspect import Profile, drdl_tables, render_database_drdl
+from core.inspect import Profile, drdl_tables, log_drdl, render_database_drdl
 
 
 def tables_of(docs, collection):
@@ -264,6 +266,20 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("&id", text)
         self.assertNotIn("*id", text)
         self.assertEqual(yaml.safe_load(text)["schema"][0]["tables"], tables)
+
+    def test_rendering_is_logged(self):
+        tables = tables_of(CONVERSATIONS, "conversations")
+        plans = [{"collection": "conversations", "drdl_tables": tables}]
+        text = render_database_drdl(plans, "db")
+        # Without the file handler: assertLogs swaps the handlers out, and one
+        # attached inside the block would be dropped with its file still open.
+        logger = logging.getLogger("mongo2sql")
+        with mock.patch("core.inspect.get_logger", return_value=logger), self.assertLogs(logger, "INFO") as logs:
+            log_drdl(text, plans, "db", "out.drdl")
+        line = logs.output[0]
+        self.assertIn("DRDL üretildi veritabanı=db koleksiyonlar=conversations", line)
+        self.assertIn(f"tablolar={len(tables)} ", line)
+        self.assertIn("dosya=out.drdl", line)
 
     def test_plan_without_drdl_tables_is_refused(self):
         with self.assertRaises(ValueError):

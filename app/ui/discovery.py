@@ -19,10 +19,12 @@ from app.ui.services import (
 )
 from core.inspect import (
     NESTING_HYBRID,
+    log_drdl,
     render_database_ddl,
     render_database_drdl,
     sql_table_ident,
 )
+from core.logutil import get_logger
 from core.settings import load_transfer_prefs
 from core.transfer import apply_table_names, retarget_plan
 
@@ -35,6 +37,12 @@ RESULT_KEYS = (
     "result_summary",
     "result_skipped",
 )
+
+
+def _log_download(file_name: str, text: str) -> None:
+    get_logger().info(
+        "DRDL indirildi dosya=%s boyut_kb=%.1f", file_name, len(text.encode("utf-8")) / 1024
+    )
 
 
 def _clear_results() -> None:
@@ -176,12 +184,14 @@ def render(settings: Settings) -> None:
                 st.session_state.pop("ddl", None)
                 st.session_state.pop("plan", None)
                 st.session_state["drdl"] = render_database_drdl(plans, database)
+                log_drdl(st.session_state["drdl"], plans, database)
             else:
                 plan = plans[0]
                 named = _named_plan(settings, plan, collection)
                 st.session_state["plan"] = plan
                 st.session_state["ddl"] = render_database_ddl([named])
                 st.session_state["drdl"] = render_database_drdl([named], database)
+                log_drdl(st.session_state["drdl"], [named], database)
             # Kept for later reruns, shown under the next-step bar below.
             st.session_state["result_summary"] = (
                 f"{len(plans)} koleksiyon · {format_int(total_docs)} belge profillendi"
@@ -245,6 +255,8 @@ def render(settings: Settings) -> None:
                     drdl,
                     f"{name}.drdl",
                     key="disc_drdl_download",
+                    on_click=_log_download,
+                    args=(f"{name}.drdl", drdl),
                 )
                 st.code(drdl, language="yaml")
             with plan_tab:
@@ -253,5 +265,11 @@ def render(settings: Settings) -> None:
                     expanded=False,
                 )
         else:
-            st.download_button("DRDL indir", st.session_state["drdl"], f"{name}.drdl")
+            st.download_button(
+                "DRDL indir",
+                st.session_state["drdl"],
+                f"{name}.drdl",
+                on_click=_log_download,
+                args=(f"{name}.drdl", st.session_state["drdl"]),
+            )
             st.code(st.session_state["drdl"], language="yaml")

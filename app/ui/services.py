@@ -776,6 +776,15 @@ def profile_many(
     errors: list[str] = []
     total_docs = 0
 
+    log = get_logger()
+    job = JobLog(
+        "şema keşfi",
+        veritabanı=settings.mongo.get("database"),
+        koleksiyonlar=len(names),
+        örnek=sample,
+        nesting=nesting,
+    )
+    job.start()
     mongo = mongo_client(settings.mongo)
     status = st.empty()
     bar = st.progress(0)
@@ -783,6 +792,7 @@ def profile_many(
         mongo.connect()
         for i, name in enumerate(names, 1):
             status.caption(f"Profilleniyor: {name} ({i}/{len(names)})")
+            started = job.elapsed()
             try:
                 profile, plan = profile_collection(
                     mongo,
@@ -796,16 +806,37 @@ def profile_many(
                 )
                 if profile.documents == 0:
                     skipped.append(name)
+                    log.info("şema keşfi koleksiyon boş, atlandı collection=%s", name)
                 else:
                     plans.append(plan)
                     total_docs += profile.documents
+                    log.info(
+                        "şema keşfi koleksiyon tamam collection=%s belgeler=%s alanlar=%s "
+                        "drdl_tabloları=%s süre_sn=%.1f%s",
+                        name,
+                        profile.documents,
+                        len(profile.stats),
+                        len(plan.get("drdl_tables") or []),
+                        job.elapsed() - started,
+                        " alan_sınırı_aşıldı=evet" if profile.paths_truncated else "",
+                    )
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
+                log.exception("şema keşfi koleksiyon başarısız collection=%s error=%s", name, exc)
             bar.progress(i / len(names))
+    except Exception as exc:
+        log.exception("şema keşfi başarısız error=%s", exc)
+        raise
     finally:
         mongo.close()
         status.empty()
         bar.empty()
+    job.done(
+        belgeler=total_docs,
+        profillenen=len(plans),
+        atlanan=len(skipped),
+        hata=len(errors),
+    )
     return plans, skipped, errors, total_docs
 
 

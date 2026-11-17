@@ -33,6 +33,7 @@ from bson import Binary, Decimal128, Int64, ObjectId, json_util
 from bson.datetime_ms import DatetimeMS
 import yaml
 
+from core.logutil import JobLog, get_logger
 from core.mongo import MongoClientWrapper
 from core.settings import load_settings
 from core.textutil import safe_console, utf16_len, json_text
@@ -1162,6 +1163,20 @@ def render_database_drdl(plans: list[dict[str, Any]], database: str) -> str:
     )
 
 
+def log_drdl(text: str, plans: list[dict[str, Any]], database: str, target: str | None = None) -> None:
+    """One log line for a rendered DRDL: what it covers and where it went."""
+    tables = [table for plan in plans for table in plan.get("drdl_tables") or []]
+    get_logger().info(
+        "DRDL üretildi veritabanı=%s koleksiyonlar=%s tablolar=%s kolonlar=%s boyut_kb=%.1f%s",
+        database,
+        ",".join(str(plan.get("collection")) for plan in plans),
+        len(tables),
+        sum(len(table["columns"]) for table in tables),
+        len(text.encode("utf-8")) / 1024,
+        f" dosya={target}" if target else "",
+    )
+
+
 def render_drdl(plan: dict[str, Any], database: str) -> str:
     """DRDL for one collection, in mongodrdl's format (see `drdl_tables`)."""
     return render_database_drdl([plan], database)
@@ -1377,21 +1392,44 @@ def main() -> int:
             username=mcfg.get("username") or None,
             password=mcfg.get("password") or None,
         )
-        source.connect()
+        try:
+            source.connect()
+        except Exception as exc:
+            get_logger().exception(
+                "şema keşfi bağlanamadı veritabanı=%s collection=%s error=%s", database, collection, exc
+            )
+            raise
         documents = iter_from_mongo(source, collection, args.sample)
 
+    job = JobLog(
+        "şema keşfi",
+        veritabanı=database,
+        collection=collection,
+        kaynak=args.from_file or "mongo",
+        örnek=args.sample,
+        nesting=args.nesting,
+    )
+    job.start()
     try:
         for doc in documents:
             profile.add_document(doc)
+            job.progress(profile.documents)
             if args.progress_every and profile.documents % args.progress_every == 0:
                 print(f"... {profile.documents} dokuman", file=sys.stderr)
+    except Exception as exc:
+        get_logger().exception(
+            "şema keşfi başarısız collection=%s belgeler=%s error=%s", collection, profile.documents, exc
+        )
+        raise
     finally:
         if source is not None:
             source.close()
 
     if not profile.documents:
+        get_logger().warning("şema keşfi koleksiyon boş collection=%s", collection)
         print("Hic dokuman okunamadi.", file=sys.stderr)
         return 1
+    job.done(belgeler=profile.documents, alanlar=len(profile.stats))
 
     maps = detect_map_prefixes(profile, args.map_min_keys, args.map_max_fill)
     plan = build_plan(
@@ -1413,7 +1451,9 @@ def main() -> int:
         )
         print(f"\nJSON mapping -> {args.out_json}")
     if args.out_drdl:
-        Path(args.out_drdl).write_text(render_drdl(plan, database), encoding="utf-8")
+        drdl = render_drdl(plan, database)
+        Path(args.out_drdl).write_text(drdl, encoding="utf-8")
+        log_drdl(drdl, [plan], database, args.out_drdl)
         print(f"DRDL -> {args.out_drdl}")
     if args.out_ddl:
         Path(args.out_ddl).write_text(render_ddl(plan), encoding="utf-8")
